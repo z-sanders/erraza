@@ -1,5 +1,5 @@
 -- Migration for Erraza: Create orders table in Supabase
--- Run this in your Supabase SQL Editor
+-- Run this in your Supabase SQL Editor at: https://supabase.com/dashboard/project/tnzfpgwufvukugwnjhoo/sql/new
 
 -- Create the erraza_orders table
 CREATE TABLE IF NOT EXISTS erraza_orders (
@@ -15,4 +15,13 @@ CREATE TABLE IF NOT EXISTS erraza_orders (
 CREATE INDEX IF NOT EXISTS idx_erraza_orders_expires_at ON erraza_orders(expires_at);
 
 -- Function to clean up expired records (run periodically via cron or manually)
--- Example: SELECT cleanup_erraza_orders();
+CREATE OR REPLACE FUNCTION cleanup_erraza_orders()
+RETURNS INTEGER AS $$
+DECLARE
+  deleted_count INTEGER;
+BEGIN
+  DELETE FROM erraza_orders WHERE expires_at < NOW();
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
