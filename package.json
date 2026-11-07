@@ -14,7 +14,7 @@
     "node": "24.x"
   },
   "dependencies": {
-    "@upstash/redis": "1.41.0",
+    "@supabase/supabase-js": "2.49.1",
     "qrcode": "1.5.4"
   },
   "devDependencies": {
