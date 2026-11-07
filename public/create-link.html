@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#f1f4f4" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Erraza | Create payment link</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preload" href="/fonts/space-grotesk-var.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/pwa-icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <script src="/mobile.js" defer></script>
+  <script src="/pwa.js" defer></script>
+  <script src="/payment-links.js" defer></script>
+  <script src="/create-link.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#linkForm">Skip to link creator</a>
+  <div class="page-shell">
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Checkout" id="creatorBrandLink">
+        <svg class="brand-mark" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M5 6h26l-4 6H5V6Zm0 9h21l-4 6H5v-6Zm0 9h26l-4 6H5v-6Z" fill="currentColor" /></svg>
+        <span id="creatorBrand">Erraza</span>
+      </a>
+      <nav class="header-actions" aria-label="Link creator options">
+        <a class="text-button" href="/">View checkout<span class="icon icon-arrow-up-right" aria-hidden="true"></span></a>
+        <button class="theme-button" id="creatorTheme" type="button" aria-label="Switch to dark mode" aria-pressed="false">
+          <span class="icon icon-sun" id="creatorThemeIcon" aria-hidden="true"></span><span id="creatorThemeLabel">Light</span>
+        </button>
+      </nav>
+    </header>
+
+    <main class="link-layout">
+      <section class="checkout-card link-card" aria-labelledby="linkTitle">
+        <div class="form-heading">
+          <div><h1 id="linkTitle">Create a payment link</h1><p>Set the amount. Copy the link. Send it your way.</p></div>
+          <span class="form-heading-mark" aria-hidden="true"><span class="icon icon-arrow-up-right"></span></span>
+        </div>
+        <form id="linkForm" novalidate>
+          <div class="field-labels"><label for="linkAmount">Amount</label><label for="linkCurrency">Currency</label></div>
+          <div class="amount-control" id="linkAmountControl">
+            <div class="amount-value"><span class="amount-symbol" id="linkSymbol" aria-hidden="true">$</span><input id="linkAmount" name="amount" type="text" inputmode="decimal" placeholder="0.00" value="100.00" autocomplete="off" spellcheck="false" aria-describedby="linkError" /></div>
+            <div class="currency-control">
+              <select id="linkCurrency" name="currency" disabled aria-describedby="linkNotice"><option value="">Loading</option></select>
+              <span class="icon icon-caret-down" aria-hidden="true"></span>
+            </div>
+          </div>
+          <p class="field-error" id="linkError" role="alert" hidden></p>
+          <div class="reference-field">
+            <label class="field-label" for="linkReference">For <span class="optional-label">(optional)</span></label>
+            <input class="search-input" id="linkReference" name="reference" type="text" maxlength="80" placeholder="Name or payment reference" autocomplete="off" spellcheck="false" aria-describedby="linkReferenceHint referenceError" />
+            <p class="field-note" id="linkReferenceHint">Personalizes the link. Funds still go to <span id="linkMerchant">the configured merchant</span>. Don’t include private information.</p>
+            <p class="field-error" id="referenceError" role="alert" hidden></p>
+          </div>
+          <p class="link-description">The amount is prefilled when the link opens. The payer can still edit it and choose how to pay.</p>
+          <div class="availability-notice" id="linkNoticeBox" role="status"><span class="icon icon-info" aria-hidden="true"></span><div><p id="linkNotice">Loading currencies…</p><button class="text-button" id="linkRetry" type="button" hidden>Try again</button></div></div>
+          <button class="button button-primary continue-button" type="submit" id="generateLink" disabled>Create link<span class="icon icon-arrow-right" aria-hidden="true"></span></button>
+        </form>
+
+        <section class="link-result" id="linkResult" aria-labelledby="linkResultTitle" hidden>
+          <h2 id="linkResultTitle" tabindex="-1">Ready to share</h2>
+          <label class="field-label" for="generatedLink">Payment link</label>
+          <textarea class="copy-value" id="generatedLink" rows="3" readonly spellcheck="false"></textarea>
+          <div class="link-actions">
+            <button class="button button-primary" type="button" id="copyLink"><span class="icon icon-copy" aria-hidden="true"></span>Copy link</button>
+            <a class="button button-secondary" id="previewLink" target="_blank" rel="noopener noreferrer">Preview checkout<span class="icon icon-arrow-up-right" aria-hidden="true"></span><span class="sr-only"> (opens in a new tab)</span></a>
+          </div>
+          <p class="copy-feedback" id="linkFeedback" role="status"></p>
+          <p class="field-note link-local-note" id="localLinkNote" hidden>This is a local preview link. Open this creator on your live website to generate a link you can share with customers.</p>
+        </section>
+        <p class="link-footnote">Creating a link does not charge anyone or create an invoice.</p>
+      </section>
+    </main>
+    <footer class="site-footer link-footer"><p>Payment links for <span id="creatorFooterBrand">Erraza</span></p><button class="text-button install-button" type="button" data-install-app hidden>Add to home screen</button><a href="/">Back to checkout</a></footer>
+  </div>
+  <dialog class="dialog" id="installDialog" aria-labelledby="installTitle">
+    <div class="dialog-heading"><h2 id="installTitle" tabindex="-1">Add to home screen</h2><button class="icon-button" type="button" data-close="installDialog" aria-label="Close installation help"><span class="icon icon-x" aria-hidden="true"></span></button></div>
+    <div class="privacy-copy"><p>In Safari, tap Share, then Add to Home Screen.</p><p>You’ll still need an internet connection to make a payment or check its status.</p></div>
+  </dialog>
+</body>
+</html>

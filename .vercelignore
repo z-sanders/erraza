@@ -1,0 +1,33 @@
+# Credentials and customer records never enter deployment uploads.
+.env
+.env.*
+**/.env
+**/.env.*
+**/orders.json
+**/orders*.json
+**/customers*.json
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# Vercel installs dependencies; generated public assets are rebuilt.
+node_modules/
+public/icons/*.svg
+public/icons/LICENSE.txt
+public/fonts/licenses/
+
+# Local adapters/tests/docs are not deployed. Keep scripts/build.js and check.js.
+server.js
+test/
+tests/
+docs/
+README.md
+coverage/
+playwright-report/
+test-results/
+screenshots/
+*.log
+.git/
+.vercel/
+.zcode/

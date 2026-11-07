@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#111b1e" />
+  <title>You’re offline</title>
+  <link rel="icon" type="image/png" href="/pwa-icons/icon-192.png" />
+  <link rel="stylesheet" href="/offline.css" />
+  <script src="/offline.js" defer></script>
+</head>
+<body>
+  <main aria-labelledby="offlineTitle">
+    <img class="brand-mark" src="/pwa-icons/icon-192.png" width="64" height="64" alt="" />
+    <h1 id="offlineTitle">Connection needed</h1>
+    <p id="offlineMessage">You’re offline. Reconnect to continue. If you already paid, check its status before trying again.</p>
+    <button id="reconnectButton" type="button" aria-describedby="offlineMessage" hidden>Reconnect</button>
+    <noscript><p>Once connected, reload this page to continue.</p></noscript>
+  </main>
+</body>
+</html>

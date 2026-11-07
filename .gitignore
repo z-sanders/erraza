@@ -1,0 +1,31 @@
+# Backend credentials and provider/customer data
+.env
+.env.*
+!.env.example
+**/orders.json
+**/orders*.json
+**/customers*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Dependencies, local deployment metadata, and diagnostics
+node_modules/
+.vercel/
+.zcode/
+coverage/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Generated from pinned dependencies / vendored licenses by npm run build
+public/icons/*.svg
+public/icons/LICENSE.txt
+public/fonts/licenses/
+
+# Local-only browser/test output
+playwright-report/
+test-results/
+screenshots/

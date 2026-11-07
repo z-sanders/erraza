@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#f1f4f4" />
+  <meta name="description" content="Choose your amount and payment method. Review your payment details and follow its status in one place." />
+  <meta name="referrer" content="no-referrer" />
+  <title>Erraza | Payment checkout</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preload" href="/fonts/space-grotesk-var.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/pwa-icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <script src="/mobile.js" defer></script>
+  <script src="/pwa.js" defer></script>
+  <script src="/payment-links.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#checkout">Skip to payment</a>
+  <div class="page-shell">
+    <header class="site-header">
+      <div class="brand-group">
+        <a class="brand" id="brandLink" href="/" aria-label="Erraza checkout">
+          <svg class="brand-mark" viewBox="0 0 36 36" fill="none" aria-hidden="true">
+            <path d="M5 6h26l-4 6H5V6Zm0 9h21l-4 6H5v-6Zm0 9h26l-4 6H5v-6Z" fill="currentColor" />
+          </svg>
+          <span data-brand>Erraza</span>
+        </a>
+        <span class="environment-label" id="environmentLabel" hidden>Test environment</span>
+      </div>
+      <nav class="header-actions" aria-label="Checkout options">
+        <button class="text-button help-button" id="helpButton" type="button" aria-haspopup="dialog" aria-controls="helpDialog">
+          <span class="icon icon-question" aria-hidden="true"></span>
+          <span>Payment help</span>
+        </button>
+        <button class="theme-button" id="themeToggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
+          <span class="icon icon-sun" id="themeIcon" aria-hidden="true"></span>
+          <span id="themeLabel">Light</span>
+        </button>
+      </nav>
+    </header>
+
+    <main class="checkout-layout" id="main">
+      <section class="intro" aria-label="A simpler checkout">
+        <p class="intro-title">Payment,<span>made simple.</span></p>
+        <p class="intro-copy">Choose your amount. Pay your way.<br />Keep the details in view.</p>
+        <div class="intro-note">
+          <span class="icon icon-arrow-up-right" aria-hidden="true"></span>
+          <p>Review before you pay.<br /><span>Follow your payment, right here.</span></p>
+        </div>
+      </section>
+
+      <section class="checkout-card" id="checkout" aria-labelledby="checkoutTitle" tabindex="-1">
+        <div class="form-heading">
+          <div>
+            <h1 id="checkoutTitle">Payment details</h1>
+          </div>
+          <span class="form-heading-mark" aria-hidden="true"><span class="icon icon-wallet"></span></span>
+        </div>
+
+        <div class="resume-notice" id="resumeNotice" hidden>
+          <div>
+            <p class="notice-title" id="resumeTitle">Your previous payment</p>
+            <p id="resumeDescription">Check its status before starting another.</p>
+          </div>
+          <button class="text-button" id="resumeButton" type="button">Return to payment<span class="icon icon-arrow-right" aria-hidden="true"></span></button>
+        </div>
+
+        <p class="sandbox-note" data-sandbox hidden>Test environment. Do not send real funds.</p>
+
+        <form id="paymentForm" novalidate>
+          <fieldset class="payment-fields" id="paymentFields">
+            <legend class="sr-only">Choose the amount and payment method</legend>
+            <div class="amount-section">
+              <div class="field-labels">
+                <label for="amountInput">Amount</label>
+                <label for="currencySelect">Currency</label>
+              </div>
+              <div class="amount-control" id="amountControl">
+                <div class="amount-value">
+                  <span class="amount-symbol" id="currencySymbol" aria-hidden="true"></span>
+                  <input id="amountInput" name="amount" type="text" inputmode="decimal" enterkeyhint="done" autocomplete="off" spellcheck="false" maxlength="32" value="100.00" placeholder="0.00" aria-describedby="amountHint amountError" />
+                </div>
+                <div class="currency-control">
+                  <select id="currencySelect" name="currency" disabled aria-describedby="availabilityText">
+                    <option value="">Loading</option>
+                  </select>
+                  <span class="icon icon-caret-down" aria-hidden="true"></span>
+                </div>
+              </div>
+              <p class="sr-only" id="amountHint">Enter an amount without thousands separators.</p>
+              <p class="field-error" id="amountError" aria-live="polite" hidden></p>
+              <div class="quick-amounts" id="quickAmounts" role="group" aria-label="Quick amounts">
+                <button type="button" data-amount="25" aria-pressed="false">25</button>
+                <button type="button" data-amount="50" aria-pressed="false">50</button>
+                <button type="button" data-amount="100" aria-pressed="true">100</button>
+                <button type="button" data-amount="250" aria-pressed="false">250</button>
+              </div>
+            </div>
+
+            <fieldset class="method-fieldset">
+              <legend>Payment method</legend>
+              <div class="method-options">
+                <label class="method-option">
+                  <input id="methodCard" type="radio" name="method" value="card" checked />
+                  <span class="method-option-content"><span class="icon icon-credit-card" aria-hidden="true"></span><span>Fiat / card</span></span>
+                </label>
+                <label class="method-option">
+                  <input id="methodCrypto" type="radio" name="method" value="crypto" aria-controls="cryptoPanel" />
+                  <span class="method-option-content"><span class="icon icon-currency-btc" aria-hidden="true"></span><span>Crypto</span></span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div class="method-panel" id="cryptoPanel" hidden>
+              <label class="field-label" id="assetLabel" for="assetPicker">Coin &amp; network</label>
+              <button class="asset-picker" id="assetPicker" type="button" aria-haspopup="dialog" aria-controls="assetDialog" aria-labelledby="assetLabel selectedAssetName selectedAssetNetwork" aria-describedby="assetHint" disabled>
+                <span class="asset-avatar" id="selectedAssetAvatar" aria-hidden="true"><span class="icon icon-wallet"></span></span>
+                <span class="asset-picker-text">
+                  <span id="selectedAssetName">Choose a coin</span>
+                  <span id="selectedAssetNetwork">Loading supported networks…</span>
+                </span>
+                <span class="icon icon-caret-down" aria-hidden="true"></span>
+              </button>
+              <p class="sr-only" id="assetHint">Choose an exact coin and network supported by the merchant.</p>
+              <div class="asset-load-message" id="assetLoadMessage" hidden>
+                <p id="assetLoadText"></p>
+                <button class="text-button" id="retryAssets" type="button">Try again</button>
+              </div>
+              <div class="estimate-area" id="estimateArea" aria-busy="false">
+                <div class="estimate-line">
+                  <span>Estimated payment</span>
+                  <output id="estimateValue" for="amountInput currencySelect assetPicker">Choose a coin first</output>
+                </div>
+                <div class="estimate-feedback" id="estimateFeedback" hidden>
+                  <p id="estimateError" aria-live="polite"></p>
+                  <button class="text-button" id="retryEstimate" type="button">Refresh estimate</button>
+                </div>
+                <p class="field-note">Final amount shown before you pay. Network fees may apply.</p>
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="availability-notice" id="availabilityNotice" role="status">
+            <span class="icon icon-info" aria-hidden="true"></span>
+            <div>
+              <p id="availabilityText">Loading checkout…</p>
+              <button class="text-button" id="retryConfig" type="button" hidden>Try again</button>
+            </div>
+          </div>
+          <div class="checkout-error" id="checkoutErrorBox" role="alert" hidden>
+            <p id="checkoutError"></p>
+          </div>
+          <button class="button button-primary continue-button" id="continueButton" type="submit" disabled aria-describedby="continueNote availabilityText checkoutError">
+            <span class="continue-content"><span id="continueLabel">Continue</span><span id="continueAmount" hidden></span></span>
+            <span class="icon icon-arrow-right" id="continueIcon" aria-hidden="true"></span>
+          </button>
+          <p class="continue-note" id="continueNote" hidden>Review your total before you pay.</p>
+        </form>
+        <noscript><p class="noscript-note">JavaScript is needed to securely retrieve payment details. Please enable it, then reload this page.</p></noscript>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>Payment processing by <a href="https://nowpayments.io/" target="_blank" rel="noopener noreferrer">NOWPayments<span class="icon icon-arrow-up-right" aria-hidden="true"></span><span class="sr-only"> (opens in a new tab)</span></a></p>
+      <p class="local-note"><button class="text-button install-button" type="button" data-install-app hidden>Add to home screen</button><button class="text-button" id="privacyButton" type="button" aria-haspopup="dialog" aria-controls="privacyDialog">Privacy</button></p>
+    </footer>
+  </div>
+
+  <dialog class="dialog asset-dialog" id="assetDialog" aria-labelledby="assetDialogTitle" aria-describedby="assetDialogDescription">
+    <div class="dialog-heading">
+      <div><h2 id="assetDialogTitle" tabindex="-1">Coin &amp; network</h2><p id="assetDialogDescription">Choose the network your wallet will use.</p></div>
+      <button class="icon-button" type="button" data-close="assetDialog" aria-label="Close coin selection"><span class="icon icon-x" aria-hidden="true"></span></button>
+    </div>
+    <label class="field-label" for="assetSearch">Find a coin or network</label>
+    <input class="search-input" id="assetSearch" type="search" placeholder="Search by name, ticker or network" autocomplete="off" spellcheck="false" />
+    <p class="asset-results-count" id="assetResultsCount" role="status"></p>
+    <ul class="asset-results" id="assetResults" aria-label="Supported coins and networks"></ul>
+    <p class="empty-results" id="assetEmpty" hidden>No matches. Try a different coin name or network.</p>
+    <p class="dialog-footnote">Only the merchant’s supported coin and network pairs are listed.</p>
+  </dialog>
+
+  <dialog class="dialog payment-dialog" id="paymentDialog" aria-labelledby="paymentTitle" aria-describedby="paymentDescription">
+    <div class="dialog-heading payment-dialog-heading">
+      <div class="payment-status-icon" id="paymentStatusIcon" aria-hidden="true"><span class="icon icon-wallet" id="paymentStatusGlyph"></span></div>
+      <button class="icon-button" type="button" data-close="paymentDialog" aria-label="Close payment details"><span class="icon icon-x" aria-hidden="true"></span></button>
+    </div>
+    <p class="sandbox-note" data-sandbox hidden>Test environment. Do not send real funds.</p>
+    <div class="payment-status-copy" aria-live="polite" aria-atomic="true">
+      <p class="status-label" id="paymentStatusLabel">Checking status</p>
+      <h2 id="paymentTitle" tabindex="-1">Finding your payment</h2>
+      <p id="paymentDescription">Retrieving the latest details from the payment provider.</p>
+    </div>
+    <p class="return-note" id="returnNote" hidden></p>
+    <p class="provider-message" id="providerMessage" hidden></p>
+
+    <section class="crypto-payment" id="cryptoPayment" aria-label="Crypto payment details" hidden>
+      <div class="payment-amount-row">
+        <div><p class="field-label" id="paymentAmountLabel">Send exactly</p><p class="payment-amount"><span id="paymentAmount"></span> <span class="payment-ticker" id="paymentTicker"></span></p></div>
+        <button class="copy-button" type="button" data-copy="amount" aria-label="Copy exact crypto amount"><span class="icon icon-copy" aria-hidden="true"></span><span class="copy-label">Copy</span></button>
+      </div>
+      <div class="network-instruction" id="networkInstruction"><span class="icon icon-globe" aria-hidden="true"></span><span>Network <strong id="paymentNetwork"></strong></span></div>
+      <div class="payment-detail-field">
+        <div class="field-labels"><label for="paymentAddress">Payment address</label><button class="copy-button" type="button" data-copy="address" aria-label="Copy payment address"><span class="icon icon-copy" aria-hidden="true"></span><span class="copy-label">Copy</span></button></div>
+        <textarea class="copy-value" id="paymentAddress" readonly rows="2" spellcheck="false"></textarea>
+      </div>
+      <div class="payment-detail-field memo-field" id="paymentMemoWrap" hidden>
+        <div class="field-labels"><label for="paymentMemo">Required memo / destination tag</label><button class="copy-button" type="button" data-copy="memo" aria-label="Copy required memo or destination tag"><span class="icon icon-copy" aria-hidden="true"></span><span class="copy-label">Copy</span></button></div>
+        <textarea class="copy-value" id="paymentMemo" readonly rows="1" spellcheck="false"></textarea>
+        <p class="memo-warning">Include this memo exactly. Without it, your payment may not be credited.</p>
+      </div>
+      <p class="network-caution" id="networkCaution"></p>
+      <details class="qr-disclosure" id="paymentQrWrap" hidden>
+        <summary>Scan with another device</summary>
+        <figure class="payment-qr"><img id="paymentQr" width="192" height="192" alt="QR code for the payment address" /><figcaption>Address only. Enter the exact amount and required memo in your wallet.</figcaption></figure>
+      </details>
+      <div class="payment-expiry" id="paymentExpiry" hidden><span>Payment window</span><strong id="paymentExpiryValue"></strong></div>
+    </section>
+
+    <section class="card-payment" id="cardPayment" aria-label="Card checkout" hidden>
+      <p>Continue to the provider’s fiat on-ramp to buy crypto with your card. Review the final fees and any identity checks there.</p>
+      <a class="button button-primary external-checkout" id="externalCheckout" target="_blank" rel="noopener noreferrer" hidden>Open secure checkout<span class="icon icon-arrow-up-right" aria-hidden="true"></span><span class="sr-only"> (opens in a new tab)</span></a>
+      <p class="field-note" id="cardDestinationNote">The provider’s checkout link is being prepared.</p>
+    </section>
+
+    <dl class="receipt" id="paymentReceipt" hidden>
+      <div><dt>Order reference</dt><dd class="receipt-order"><span id="receiptOrder"></span><button class="copy-button" id="copyOrderButton" type="button" data-copy="order" aria-label="Copy order reference" disabled><span class="icon icon-copy" aria-hidden="true"></span><span class="copy-label">Copy</span></button></dd></div>
+      <div><dt>Payment amount</dt><dd id="receiptAmount"></dd></div>
+      <div><dt>Payment to</dt><dd id="receiptMerchant"></dd></div>
+      <div id="receiptReferenceRow" hidden><dt>For</dt><dd id="receiptReference"></dd></div>
+      <div><dt>Payment method</dt><dd id="receiptMethod"></dd></div>
+      <div id="receiptAssetRow" hidden><dt>Coin &amp; network</dt><dd id="receiptAsset"></dd></div>
+      <div id="receiptCreatedRow" hidden><dt>Created</dt><dd id="receiptCreated"></dd></div>
+    </dl>
+
+    <div class="copy-fallback" id="copyFallback" hidden><label class="field-label" for="copyFallbackValue">Copy manually</label><textarea class="copy-value" id="copyFallbackValue" readonly rows="2"></textarea><p class="field-note">Select the text, then use your device’s Copy command.</p></div>
+    <p class="copy-feedback" id="copyFeedback" role="status"></p>
+    <div class="status-controls">
+      <p id="statusCheckMessage" role="status">Waiting for the latest status.</p>
+      <button class="button button-secondary" id="checkStatusButton" type="button"><span class="icon icon-arrow-clockwise" aria-hidden="true"></span><span id="checkStatusLabel">Check status</span></button>
+    </div>
+    <p class="storage-note" id="storageNote" hidden>Your browser could not save the return link. Keep this page open and keep your order reference for the merchant.</p>
+    <div class="missing-payment-actions" id="missingPaymentActions" hidden><button class="text-button" id="forgetPaymentButton" type="button">Remove saved link</button><p>This only removes the link from this browser. It does not cancel a payment.</p></div>
+    <p class="dialog-footnote">Closing this window does not cancel your payment.</p>
+    <button class="text-button dialog-help" id="paymentHelpButton" type="button" aria-haspopup="dialog" aria-controls="helpDialog">Need help with this payment?</button>
+  </dialog>
+
+  <dialog class="dialog help-dialog" id="helpDialog" aria-labelledby="helpTitle">
+    <div class="dialog-heading">
+      <div><h2 id="helpTitle" tabindex="-1">Payment help</h2><p>Answers for your payment.</p></div>
+      <button class="icon-button" type="button" data-close="helpDialog" aria-label="Close payment help"><span class="icon icon-x" aria-hidden="true"></span></button>
+    </div>
+    <div class="faq-list">
+      <details><summary>Will I pay any fees?</summary><p>Review the final total before confirming your payment. Your bank, card provider or crypto network may charge additional fees.</p></details>
+      <details><summary>How do I know my payment is complete?</summary><p>This page shows “Payment received” once your payment is confirmed complete. Until then, use “Check status” to see the latest update.</p></details>
+      <details><summary>My payment is pending or failed. What should I do?</summary><p>If you sent funds or see a card charge, don’t pay again. Check the status, then contact support with the order reference if you need help.</p></details>
+      <details><summary>Can I close this page?</summary><p>Yes. Come back in the same browser and choose “Return to payment”. Closing the page does not cancel a payment.</p></details>
+    </div>
+    <div class="help-contact"><p>Need help? Include your order reference when you contact support.</p><a class="text-link" id="supportEmail" hidden>Contact support<span class="icon icon-arrow-up-right" aria-hidden="true"></span></a></div>
+  </dialog>
+
+  <dialog class="dialog privacy-dialog" id="privacyDialog" aria-labelledby="privacyTitle">
+    <div class="dialog-heading">
+      <h2 id="privacyTitle" tabindex="-1">Your privacy</h2>
+      <button class="icon-button" type="button" data-close="privacyDialog" aria-label="Close privacy information"><span class="icon icon-x" aria-hidden="true"></span></button>
+    </div>
+    <div class="privacy-copy">
+      <p>This browser remembers your payment so you can return and check its status. If a request is interrupted, it temporarily saves the details needed to avoid starting it twice.</p>
+      <p>Card and identity details are entered with the payment provider, not on this page. The provider’s privacy policy applies there.</p>
+      <p>This checkout does not use third-party tracking scripts.</p>
+    </div>
+  </dialog>
+  <dialog class="dialog" id="installDialog" aria-labelledby="installTitle">
+    <div class="dialog-heading"><h2 id="installTitle" tabindex="-1">Add to home screen</h2><button class="icon-button" type="button" data-close="installDialog" aria-label="Close installation help"><span class="icon icon-x" aria-hidden="true"></span></button></div>
+    <div class="privacy-copy"><p>In Safari, tap Share, then Add to Home Screen.</p><p>You’ll still need an internet connection to make a payment or check its status.</p></div>
+  </dialog>
+  <p class="sr-only" id="announcer" role="status" aria-live="polite"></p>
+</body>
+</html>

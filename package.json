@@ -1,0 +1,25 @@
+{
+  "name": "erraza-checkout",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Custom-amount NOWPayments checkout with Vercel functions",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "build": "node scripts/build.js",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.js"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "@upstash/redis": "1.41.0",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@phosphor-icons/core": "2.1.1",
+    "ajv": "8.20.0",
+    "axe-core": "4.14.0"
+  }
+}
