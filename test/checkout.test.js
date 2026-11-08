@@ -136,6 +136,18 @@ test('merchant assets preserve exact stablecoin network tickers and current mini
   assert.equal(tooSmall.body.error, 'below_minimum');
 });
 
+test('merchant assets accept the current NOWPayments selectedCurrencies response', async () => {
+  const env = await setup();
+  const original = env.provider.merchantCoins;
+  env.provider.merchantCoins = async () => {
+    const data = await original();
+    return { selectedCurrencies: data.currencies };
+  };
+  const coins = await call(env.handlers.currencies);
+  assert.equal(coins.status, 200);
+  assert.ok(coins.body.currencies.some(item => item.code === 'btc'));
+});
+
 test('raw and Vercel-parsed checkout calls create a real-contract order with memo zero', async () => {
   const env = await setup();
   for (const raw of [true, false]) {
