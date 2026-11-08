@@ -171,6 +171,43 @@ test('ambiguous create timeout is not retried as a new provider payment', async 
   assert.equal(attempts, 1);
 });
 
+test('NOWPayments new status stays sendable and pending during creation and refresh', async () => {
+  const env = await setup();
+  const originalCreate = env.provider.create;
+  env.provider.create = async (...args) => {
+    const payment = await originalCreate(...args);
+    payment.payment_status = 'new';
+    env.provider.payments.get(payment.payment_id).payment_status = 'new';
+    return payment;
+  };
+
+  const created = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: checkoutBody() });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.status, 'new');
+  assert.equal(created.body.terminal, false);
+  assert.equal(created.body.complete, false);
+  assert.ok(created.body.payment?.address);
+
+  await env.store.update(created.body.orderId, current => ({ ...current, lastCheckedAt: null }));
+  const refreshed = await call(env.handlers.status, { url: `/api/status?token=${created.body.token}` });
+  assert.equal(refreshed.status, 200);
+  assert.equal(refreshed.body.status, 'new');
+  assert.notEqual(refreshed.body.status, 'verification_pending');
+  assert.equal(refreshed.body.terminal, false);
+  assert.equal(refreshed.body.complete, false);
+  assert.ok(refreshed.body.payment?.address);
+});
+
+test('new provider state cannot regress a later pending state', async () => {
+  const env = await setup();
+  const created = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: checkoutBody() });
+  const order = await env.store.getOrder(created.body.orderId);
+  const payment = await env.provider.status(order.paymentId);
+  const updated = applyProviderState({ ...order, status: 'confirming' }, { ...payment, payment_status: 'new' });
+  assert.equal(updated.status, 'confirming');
+  assert.equal(updated.complete, false);
+});
+
 test('only verified finished status settles; confirmation and sending stay pending', async () => {
   const env = await setup();
   const created = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: checkoutBody() });

@@ -69,6 +69,56 @@ async function check() {
     const stat = await exists(path.join(ROOT, 'api', `${name}.js`));
     if (!stat?.isFile() || stat.isSymbolicLink()) fail(`Missing regular API handler: ${name}.js`);
   }
+
+  // Import deployed CommonJS modules in a guarded child without invoking handlers.
+  // This catches initialization/export failures while forbidding env-file reads,
+  // outbound network calls, and listeners during the smoke gate.
+  const smokeSource = `
+    'use strict';
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const root = process.argv[1];
+    const apiNames = JSON.parse(process.argv[2]);
+    const blocked = action => () => { throw new Error('Module-load smoke attempted to ' + action); };
+    const originalReadFileSync = fs.readFileSync;
+    fs.readFileSync = function (filename, ...args) {
+      const normalized = Buffer.isBuffer(filename) ? filename.toString() : filename instanceof URL ? filename.pathname : filename;
+      if (typeof normalized === 'string' && /^\.env(?:\.|$)/.test(path.basename(normalized))) blocked('read an environment file')();
+      return originalReadFileSync.call(this, filename, ...args);
+    };
+    const originalOpenSync = fs.openSync;
+    fs.openSync = function (filename, ...args) {
+      const normalized = Buffer.isBuffer(filename) ? filename.toString() : filename instanceof URL ? filename.pathname : filename;
+      if (typeof normalized === 'string' && /^\.env(?:\.|$)/.test(path.basename(normalized))) blocked('read an environment file')();
+      return originalOpenSync.call(this, filename, ...args);
+    };
+    process.loadEnvFile = blocked('read an environment file');
+    globalThis.fetch = blocked('contact the network');
+    const net = require('node:net');
+    net.connect = blocked('contact the network');
+    net.createConnection = blocked('contact the network');
+    net.Server.prototype.listen = blocked('open a listener');
+    for (const protocol of ['node:http', 'node:https']) {
+      const client = require(protocol);
+      client.request = blocked('contact the network');
+      client.get = blocked('contact the network');
+    }
+    const handlers = require(path.join(root, 'lib', 'handlers.js'));
+    for (const name of ['createHandlers', 'handler', 'clientIp']) {
+      if (typeof handlers[name] !== 'function') throw new TypeError('lib/handlers.js export is not a function: ' + name);
+    }
+    for (const name of apiNames) {
+      const entry = require(path.join(root, 'api', name + '.js'));
+      if (typeof entry !== 'function') throw new TypeError('API entrypoint export is not a function: ' + name);
+    }
+  `;
+  const smoke = spawnSync(process.execPath, ['-e', smokeSource, ROOT, JSON.stringify(API_NAMES)], {
+    cwd: ROOT, encoding: 'utf8', timeout: 15000,
+    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec },
+  });
+  const moduleCount = API_NAMES.length + 1;
+  if (smoke.status !== 0) fail(`CommonJS module-load smoke failed:\n${smoke.stderr || smoke.stdout || smoke.error?.message || 'Unknown failure'}`);
+
   const files = [path.join(ROOT, 'server.js')];
   for (const directory of ['api', 'lib', 'scripts', 'public', 'test']) {
     if (await exists(path.join(ROOT, directory))) files.push(...await walk(path.join(ROOT, directory), directory === 'public'));
@@ -104,8 +154,8 @@ async function check() {
     for (const message of failures) console.error(`[check] ${message}`);
     process.exitCode = 1;
   } else {
-    console.log(`Offline checks passed: ${syntaxCount} JavaScript files, Vercel/header configuration, and required public assets.`);
-    console.log('This does not run tests or certify Redis, provider accounts, browser behavior, or live payments.');
+    console.log(`Offline checks passed: ${syntaxCount} JavaScript files, ${moduleCount} CommonJS modules loaded and export-checked, Vercel/header configuration, and required public assets.`);
+    console.log('This does not run tests or certify Supabase, provider accounts, browser behavior, or live payments.');
   }
 }
 

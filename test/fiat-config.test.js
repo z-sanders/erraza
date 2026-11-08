@@ -6,6 +6,35 @@ const { getConfig } = require('../lib/config');
 const { safeRedirect } = require('../lib/orders');
 const { config, setup, checkoutBody, call } = require('./helpers');
 
+test('sandbox mode must be explicitly true or false before checkout is configured', () => {
+  const valid = {
+    NOWPAYMENTS_API_KEY: 'test-api-key',
+    NOWPAYMENTS_IPN_SECRET: 'test-ipn-secret',
+    CHECKOUT_SECRET: 'test-checkout-secret-at-least-32-characters',
+    PUBLIC_BASE_URL: 'https://checkout.example',
+    SUPABASE_URL: 'https://project-ref.supabase.co',
+    SUPABASE_SERVICE_ROLE_KEY: 'x'.repeat(40),
+    NOWPAYMENTS_PAYOUT_CURRENCY: 'btc',
+  };
+
+  const sandbox = getConfig({ ...valid, NOWPAYMENTS_SANDBOX: 'true' });
+  assert.equal(sandbox.configured, true);
+  assert.equal(sandbox.sandbox, true);
+  assert.equal(sandbox.apiBase, 'https://api-sandbox.nowpayments.io/v1');
+
+  const live = getConfig({ ...valid, NOWPAYMENTS_SANDBOX: 'false' });
+  assert.equal(live.configured, true);
+  assert.equal(live.sandbox, false);
+  assert.equal(live.apiBase, 'https://api.nowpayments.io/v1');
+
+  for (const value of [undefined, '', 'TRUE', 'False', ' false ', '1']) {
+    const env = { ...valid };
+    if (value !== undefined) env.NOWPAYMENTS_SANDBOX = value;
+    const settings = getConfig(env);
+    assert.equal(settings.configured, false, String(value));
+  }
+});
+
 test('fiat defaults on for the activated merchant without a provider-host setup step', () => {
   const settings = getConfig({});
   assert.equal(settings.fiatEnabled, true);
