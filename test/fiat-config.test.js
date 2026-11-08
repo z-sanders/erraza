@@ -35,6 +35,11 @@ test('sandbox mode must be explicitly true or false before checkout is configure
   }
 });
 
+test('generic USDT payout configuration uses the selected ERC-20 provider ticker', () => {
+  const settings = getConfig({ NOWPAYMENTS_PAYOUT_CURRENCY: 'USDT' });
+  assert.equal(settings.payoutCurrency, 'usdterc20');
+});
+
 test('fiat defaults on for the activated merchant without a provider-host setup step', () => {
   const settings = getConfig({});
   assert.equal(settings.fiatEnabled, true);
