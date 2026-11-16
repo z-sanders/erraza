@@ -339,6 +339,56 @@ legend { padding: 0; }
 .faq-list summary::marker { color: var(--text-tertiary); font-size: 10px; }
 .faq-list details > p { padding: 0 0 17px 17px; font-size: 12px; color: var(--text-secondary); line-height: 1.8; }
 .help-contact { margin-top: 21px; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.help-guide-entry { display: grid; justify-items: start; gap: 8px; margin-top: 20px; padding: 15px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-muted); color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.help-guide-entry .button { width: 100%; min-height: 44px; padding: 10px 14px; font-size: 12px; }
+.help-guide-entry .field-note { color: var(--error); }
+.card-guide-entry { color: var(--accent); }
+.card-guide-notice { margin-top: 16px; margin-bottom: 0; }
+.card-guide-inline-actions { display: flex; flex-wrap: wrap; gap: 2px 16px; }
+.card-guide-recovery { padding: 15px; margin-top: 18px; border: 1px solid var(--error); border-radius: var(--radius-md); background: var(--error-soft); }
+.card-guide-recovery .notice-title { color: var(--text); font-size: 12px; font-weight: 600; }
+.card-guide-recovery > p:not(.notice-title) { margin-top: 6px; color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
+.card-guide-recovery .button { width: 100%; min-height: 44px; margin-top: 13px; padding: 10px 14px; font-size: 12px; }
+.card-guide-dialog { width: 600px; }
+.card-guide-heading { margin-bottom: 16px; }
+.card-guide-heading > div { min-width: 0; }
+.card-guide-heading p { max-width: 480px; line-height: 1.65; }
+.card-guide-progress { padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.card-guide-progress > p { color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+.card-guide-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 0; margin: 10px 0 0; list-style: none; }
+.card-guide-steps li { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; min-height: 38px; padding: 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--text-tertiary); background: var(--surface-muted); font-size: 11px; font-weight: 550; }
+.card-guide-steps li > span:first-child { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: 0 0 20px; border: 1px solid var(--input-line); border-radius: 50%; font-variant-numeric: tabular-nums; }
+.card-guide-steps li[aria-current="step"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.card-guide-steps li[aria-current="step"] > span:first-child { border-color: currentColor; }
+.card-guide-summary { display: grid; gap: 7px; margin: 14px 0 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-muted); }
+.card-guide-summary > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; font-size: 11px; }
+.card-guide-summary dt { color: var(--text-tertiary); }
+.card-guide-summary dd { margin: 0; color: var(--text); text-align: right; font-weight: 550; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.card-guide-status { min-height: 0; margin-top: 10px; color: var(--text-secondary); font-size: 11px; line-height: 1.65; }
+.card-guide-status:empty { display: none; }
+.card-guide-storage-note, .card-guide-warning { padding: 11px 12px; margin-top: 12px; border: 1px solid var(--error); border-radius: var(--radius-sm); background: var(--error-soft); color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
+.card-guide-warning strong { color: var(--text); }
+.card-guide-panel { margin-top: 16px; }
+.card-guide-panel h3 { font-family: var(--font-display); font-size: 18px; line-height: 1.35; font-weight: 550; letter-spacing: -.35px; }
+.card-guide-panel > p { margin-top: 8px; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.card-guide-panel > p strong { color: var(--text); }
+.card-guide-asset-button, .card-guide-provider { width: 100%; margin-top: 14px; }
+.card-guide-asset-choice { padding: 9px 11px; border-left: 2px solid var(--accent); background: var(--accent-soft); color: var(--text) !important; overflow-wrap: anywhere; }
+.card-guide-check { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; margin-top: 13px; padding: 10px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-secondary); font-size: 12px; line-height: 1.6; cursor: pointer; }
+.card-guide-check:hover { border-color: var(--input-line); background: var(--surface-muted); }
+.card-guide-check input { width: 18px; height: 18px; flex: 0 0 18px; margin: 1px 0 0; accent-color: var(--accent); }
+.card-guide-check span { min-width: 0; }
+.card-guide-check strong { color: var(--text); overflow-wrap: anywhere; }
+.card-guide-checklist { margin-top: 12px; border-block: 1px solid var(--line); }
+.card-guide-checklist summary { min-height: 44px; padding: 11px 2px; cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 550; }
+.card-guide-checklist ul { display: grid; gap: 7px; padding: 0 0 13px 21px; margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.65; }
+.card-guide-estimate { margin-top: 12px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--text); font-size: 12px; font-weight: 550; line-height: 1.65; overflow-wrap: anywhere; }
+.card-guide-provider[aria-disabled="true"] { background: var(--disabled-bg); color: var(--disabled-text); pointer-events: none; }
+.card-guide-shared-controls { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line); }
+.card-guide-shared-controls > .text-button { color: var(--accent); margin-bottom: 8px; }
+.card-guide-controls { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.card-guide-controls .button { min-height: 44px; padding: 10px 14px; font-size: 12px; }
+.card-guide-controls #cardGuideCancel { padding-inline: 7px; white-space: nowrap; }
 .text-link { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); margin-top: 10px; font-size: 12px; font-weight: 550; text-underline-offset: 3px; }
 .text-link .icon { width: 14px; height: 14px; flex-basis: 14px; }
 .privacy-copy { display: grid; gap: 15px; color: var(--text-secondary); font-size: 13px; line-height: 1.75; }
@@ -509,6 +559,21 @@ legend { padding: 0; }
   .status-controls { flex-direction: column; align-items: stretch; }
   .status-controls p { font-size: 13px; }
   .status-controls > .button { min-height: 48px; font-size: 15px; }
+  .card-guide-inline-actions { align-items: stretch; flex-direction: column; gap: 0; }
+  .card-guide-dialog { width: 100%; }
+  .card-guide-progress > p, .card-guide-summary > div, .card-guide-status, .card-guide-storage-note, .card-guide-warning { font-size: 13px; }
+  .card-guide-steps { gap: 4px; }
+  .card-guide-steps li { min-height: 44px; padding-inline: 5px; font-size: 12px; }
+  .card-guide-panel h3 { font-size: 20px; }
+  .card-guide-panel > p, .card-guide-check, .card-guide-checklist summary, .card-guide-estimate { font-size: 14px; }
+  .card-guide-checklist ul { font-size: 13px; }
+  .card-guide-check, .card-guide-checklist summary { min-height: 48px; }
+  .card-guide-check input { width: 20px; height: 20px; flex-basis: 20px; }
+  .card-guide-controls { grid-template-columns: 1fr; }
+  .card-guide-controls .button, .card-guide-controls #cardGuideCancel { width: 100%; min-height: 48px; font-size: 15px; }
+  .card-guide-controls #cardGuideBack { order: 2; }
+  .card-guide-controls #cardGuideNext, .card-guide-controls #cardGuideFinish { order: 1; }
+  .card-guide-controls #cardGuideCancel { order: 3; }
   .dialog-help, .faq-list summary { min-height: 48px; font-size: 15px; }
   .faq-list details > p, .help-contact, .privacy-copy { font-size: 14px; line-height: 1.7; }
   .site-footer, .local-note .text-button { font-size: 12px; }
@@ -539,6 +604,9 @@ legend { padding: 0; }
   .currency-control { width: 90px; }
   .dialog { padding: 16px; }
   .dialog-heading { top: -16px; }
+  .card-guide-steps li { gap: 4px; font-size: 11px; }
+  .card-guide-steps li > span:first-child { width: 18px; height: 18px; flex-basis: 18px; }
+  .card-guide-summary > div { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 8px; }
 }
 
 @media (max-width: 767px) and (max-height: 600px) {

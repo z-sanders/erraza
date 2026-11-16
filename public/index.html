@@ -144,6 +144,7 @@
                 </div>
                 <p class="field-note">Final amount shown before you pay. Network fees may apply.</p>
               </div>
+              <button class="text-button card-guide-entry" id="cryptoGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog" hidden>Need crypto? Buy with a card</button>
             </div>
           </fieldset>
 
@@ -152,10 +153,19 @@
             <div>
               <p id="availabilityText">Loading checkout…</p>
               <button class="text-button" id="retryConfig" type="button" hidden>Try again</button>
+              <button class="text-button card-guide-entry" id="fiatGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog" hidden>Use another way to pay</button>
             </div>
           </div>
           <div class="checkout-error" id="checkoutErrorBox" role="alert" hidden>
             <p id="checkoutError"></p>
+          </div>
+          <div class="resume-notice card-guide-notice" id="cardGuideNotice" hidden>
+            <p class="notice-title">Your buying guide</p>
+            <p id="cardGuideNoticeText">Buy into your own wallet, then return here to pay. Your payment references stay available.</p>
+            <div class="card-guide-inline-actions">
+              <button class="text-button" id="resumeGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog">Return to buying guide</button>
+              <button class="text-button" id="cancelGuideButton" type="button">Use regular checkout</button>
+            </div>
           </div>
           <button class="button button-primary continue-button" id="continueButton" type="submit" disabled aria-describedby="continueNote availabilityText checkoutError">
             <span class="continue-content"><span id="continueLabel">Continue</span><span id="continueAmount" hidden></span></span>
@@ -224,9 +234,15 @@
     </section>
 
     <section class="card-payment" id="cardPayment" aria-label="Card checkout" hidden>
-      <p>Continue to the provider’s fiat on-ramp to buy crypto with your card. Review the final fees and any identity checks there.</p>
+      <p id="cardPaymentIntro">Continue to the provider’s fiat on-ramp to buy crypto with your card. Review the final fees and any identity checks there.</p>
       <a class="button button-primary external-checkout" id="externalCheckout" target="_blank" rel="noopener noreferrer" hidden>Open secure checkout<span class="icon icon-arrow-up-right" aria-hidden="true"></span><span class="sr-only"> (opens in a new tab)</span></a>
       <p class="field-note" id="cardDestinationNote">The provider’s checkout link is being prepared.</p>
+    </section>
+
+    <section class="card-recovery card-guide-recovery" id="cardRecovery" aria-label="Another way to pay" hidden>
+      <p class="notice-title">Before trying another way</p>
+      <p>A rejected status does not prove there was no charge. If you see a charge or pending card authorization, or you’re unsure, don’t pay again. Check the original status or contact support first.</p>
+      <button class="button button-secondary card-guide-entry" id="rejectedCardGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog">Use another way to pay</button>
     </section>
 
     <dl class="receipt" id="paymentReceipt" hidden>
@@ -262,7 +278,89 @@
       <details><summary>My payment is pending or failed. What should I do?</summary><p>If you sent funds or see a card charge, don’t pay again. Check the status, then contact support with the order reference if you need help.</p></details>
       <details><summary>Can I close this page?</summary><p>Yes. Come back in the same browser and choose “Return to payment”. Closing the page does not cancel a payment.</p></details>
     </div>
+    <div class="help-guide-entry">
+      <p>Don’t have crypto in a wallet you control?</p>
+      <button class="button button-secondary card-guide-entry" id="helpGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog">Need crypto? Buy with a card</button>
+      <p class="field-note" id="helpGuideBlocked" hidden></p>
+    </div>
     <div class="help-contact"><p>Need help? Include your order reference when you contact support.</p><a class="text-link" id="supportEmail" hidden>Contact support<span class="icon icon-arrow-up-right" aria-hidden="true"></span></a></div>
+  </dialog>
+
+  <dialog class="dialog card-guide-dialog" id="cardGuideDialog" aria-labelledby="cardGuideTitle" aria-describedby="cardGuideDescription">
+    <div class="dialog-heading card-guide-heading">
+      <div>
+        <h2 id="cardGuideTitle" tabindex="-1">Buy crypto with a card</h2>
+        <p id="cardGuideDescription">Two phases: get crypto into your own wallet, then come back and pay Erraza. Never enter card details or a recovery phrase here.</p>
+      </div>
+      <button class="icon-button" type="button" data-close="cardGuideDialog" aria-label="Close buying guide"><span class="icon icon-x" aria-hidden="true"></span></button>
+    </div>
+
+    <div class="card-guide-progress" aria-label="Buying guide progress">
+      <p id="cardGuideStepLabel">Step 1 of 3: Prepare</p>
+      <ol class="card-guide-steps">
+        <li id="cardGuideStep1" aria-current="step"><span>1</span><span>Choose</span></li>
+        <li id="cardGuideStep2"><span>2</span><span>Get crypto</span></li>
+        <li id="cardGuideStep3"><span>3</span><span>Pay Erraza</span></li>
+      </ol>
+    </div>
+
+    <dl class="card-guide-summary">
+      <div><dt>Payment amount</dt><dd id="cardGuideAmount">—</dd></div>
+      <div id="cardGuideReferenceRow" hidden><dt>For</dt><dd id="cardGuideReference"></dd></div>
+    </dl>
+    <p id="cardGuideSource" hidden></p>
+    <p class="card-guide-status" id="cardGuideStatus" role="status"></p>
+    <p class="card-guide-storage-note" id="cardGuideStorageNote" hidden>This browser could not save your guide. Keep this page open or restart the guide if you leave.</p>
+    <div class="card-guide-warning" id="cardGuideChargeWarning" hidden>
+      <p><strong>Before buying again:</strong> if you see a charge or pending card authorization from the earlier attempt, or you’re unsure, stop and check its original status or contact support.</p>
+      <label class="card-guide-check" for="cardGuideNoCharge"><input id="cardGuideNoCharge" type="checkbox" /><span>I don’t see a charge or pending card authorization for the earlier attempt.</span></label>
+    </div>
+
+    <section class="card-guide-panel" id="cardGuidePrepare" aria-labelledby="cardGuidePrepareTitle">
+      <h3 id="cardGuidePrepareTitle">Choose what to buy</h3>
+      <p>Choose the exact coin and network, then use an address from your own wallet. That wallet must be able to receive and <strong>send</strong> the coin on this network.</p>
+      <button class="button button-secondary card-guide-asset-button" id="cardGuideChooseAsset" type="button">Choose coin &amp; network</button>
+      <p class="card-guide-asset-choice" id="cardGuideAssetChoice">No coin and network selected.</p>
+      <p class="card-guide-warning" id="cardGuideMemoWarning" hidden>This coin may require a memo or destination tag when you send it later. Copy every payment detail exactly.</p>
+      <label class="card-guide-check" for="cardGuideWalletReady"><input id="cardGuideWalletReady" type="checkbox" /><span>My wallet can receive and send this coin on this network.</span></label>
+      <details class="card-guide-checklist">
+        <summary>Beginner wallet checklist</summary>
+        <ul>
+          <li>Use an official, trusted wallet from its verified source.</li>
+          <li>Create or copy a receive address for the exact network selected above.</li>
+          <li>Never share or enter seed words, a recovery phrase, or private keys here or with support.</li>
+          <li>Keep the wallet backup private and stored securely.</li>
+        </ul>
+      </details>
+    </section>
+
+    <section class="card-guide-panel" id="cardGuideBuy" aria-labelledby="cardGuideBuyTitle" hidden>
+      <h3 id="cardGuideBuyTitle">Get crypto</h3>
+      <div class="card-guide-estimate" id="cardGuideEstimate">Refreshing the indicative amount…</div>
+      <p>The quote is indicative. Buy enough crypto to cover the payment plus purchase, withdrawal, and network fees; there is no fixed buffer or guarantee.</p>
+      <label class="card-guide-check" for="cardGuideNetworkConfirm"><input id="cardGuideNetworkConfirm" type="checkbox" /><span>I will buy and withdraw using <strong id="cardGuideNetworkLabel">the exact selected coin and network</strong>.</span></label>
+      <a class="button button-primary card-guide-provider" id="cardGuideProvider" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-disabled="true">Buy crypto with card<span class="sr-only"> (opens in a new tab)</span></a>
+      <p><strong>This purchase only puts crypto in your wallet—it does not pay Erraza.</strong> The external service may require identity checks and is subject to region, bank, and purchase limits. Delivery can take minutes to hours.</p>
+      <p>After it arrives, return to this Erraza guide. You may instead use another trusted service that supports the exact coin and network pair.</p>
+    </section>
+
+    <section class="card-guide-panel" id="cardGuideReturn" aria-labelledby="cardGuideReturnTitle" hidden>
+      <h3 id="cardGuideReturnTitle">Return to Erraza and pay</h3>
+      <p>Once the crypto is available in your wallet, come back here to finish the Erraza payment. Don’t repurchase while delivery is pending.</p>
+      <label class="card-guide-check" for="cardGuideFundsReady"><input id="cardGuideFundsReady" type="checkbox" /><span>The crypto is in my wallet and available to send, with network fees covered.</span></label>
+      <p>Choose <strong>Return to Erraza crypto checkout</strong> below. Erraza will refresh availability and the estimate; then choosing <strong>Continue</strong> creates a fresh payment request with the exact address, network, amount, and any required memo.</p>
+      <p>Send from your wallet using those fresh Erraza details. Only Erraza’s server-confirmed received status proves the payment is paid. Crypto and fees may not be refundable.</p>
+    </section>
+
+    <div class="card-guide-shared-controls">
+      <button class="text-button" id="cardGuideRefreshQuote" type="button" hidden>Refresh estimate</button>
+      <div class="card-guide-controls">
+        <button class="button button-secondary" id="cardGuideBack" type="button">Back</button>
+        <button class="button button-primary" id="cardGuideNext" type="button">Next: Buy crypto</button>
+        <button class="button button-primary" id="cardGuideFinish" type="button" hidden>Return to Erraza crypto checkout</button>
+        <button class="text-button" id="cardGuideCancel" type="button">Leave guide</button>
+      </div>
+    </div>
   </dialog>
 
   <dialog class="dialog privacy-dialog" id="privacyDialog" aria-labelledby="privacyTitle">

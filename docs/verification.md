@@ -28,15 +28,21 @@ Checked on 2026-11-05 against the local working tree. This is an engineering tes
 - Tests cover PWA manifest/icon dimensions, cache exclusions, conservative updates, install prompt behavior, optional reference validation/persistence, unchanged payout destination, decimal-comma handling, copy-first QR order and refreshing unresolved payments after a long absence.
 - Real iOS/Android installation, virtual-keyboard behavior and provider-app return flows remain unverified. The browser checks establish local rendering and registration, not complete device acceptance. Offline fallback behavior was tested with isolated service-worker fixtures, not by disabling the host network.
 
+## Guided card-to-crypto fallback
+
+- The local working tree includes the guide’s help entry, two-phase customer journey (choose/get crypto, then pay Erraza), no-double-charge warning, exact coin/network and wallet checks, official MoonPay consumer link, and explicit return-to-Erraza instructions.
+- Local automated verification includes 15 focused fallback tests. They cover external-link privacy, no checkout creation during guidance, authoritative rejected-order context, fresh status checks, reload/foreground confirmation resets, stale quotes, exact network selection, single-dialog picker return, and payment changes in another tab. The complete local suite passes. A loopback-only fixture whose checkout endpoint always rejected payment creation was also exercised at desktop and 320px: the fiat-unavailable entry, two-phase guide, exact-network picker, saved draft, and automatic guide return rendered correctly.
+- No external purchase, live/sandbox payment, provider identity flow, deployment, or real-money transfer has been tested. The guide must not be treated as proof of MoonPay availability, delivery timing, fees, network support, or successful Erraza payment.
+
 ## Browser tooling limitation
 
 The in-app browser rendered and evaluated page scripts, but native click/keyboard delivery repeatedly timed out or had no effect despite unobstructed enabled controls. Event-handler tests used element activation through the browser evaluation API after observing the elements. Thus native pointer, keyboard, clipboard permission and end-to-end user-interaction acceptance remain unverified. Full-page screenshots also tiled incorrectly in the browser tool; viewport screenshots were used for visual checks.
 
 ## Not completed / launch gates
 
-- No Vercel deployment or Vercel-hosted browser test was performed.
+- No production fallback deployment was performed in this feature pass. The earlier Erraza deployment/storage verification remains separate from this local guide work.
 - No live or NOWPayments-sandbox payment was created. All automated provider responses were isolated test fixtures.
-- Real Redis Lua/CAS/TTL behavior was not executed: no Redis credentials or running local Docker daemon were available. Use a **dedicated test database**, set `TEST_REDIS_REST_URL` and `TEST_REDIS_REST_TOKEN`, then run `npm test` to enable `test/redis.integration.test.js`. It writes a unique namespace with two-minute TTLs. Never point it at production credentials.
+- Supabase atomicity/TTL behavior was verified earlier against the configured shared project using the isolated `test/supabase.integration.test.js` namespace: 7/7 passed. This fallback feature did not change the database schema or storage adapter.
 - Merchant fiat activation/KYC is reported complete by the user. Account-specific fiat response denominations, customer KYC/3DS and fiat settlement still need live verification. The provider host list is now an optional restriction; verified server-returned HTTPS links work without it. Unrecognized/unverified shapes fail closed.
 - Provider-issued signature fixtures containing arrays need confirmation because the official Node/Python canonicalization examples differ. Local signature tests are not proof that every vendor payload interoperates.
 - Wallet scan/transfer and actual memo/network compatibility remain unverified.

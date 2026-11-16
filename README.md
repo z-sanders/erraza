@@ -58,6 +58,14 @@ The direct API integration supports these pricing currencies: **USD, EUR, ILS, G
 
 The merchant has already completed NOWPayments' fiat activation/KYC. No repeat onboarding or second app-side approval is required. Add the remaining credentials and deployment values, then restart/redeploy. The app accepts the checkout link only from a verified server-side NOWPayments response, requires HTTPS without credentials or an unexpected port, and rejects IP-literal/local destinations. An optional exact-host allowlist can impose tighter restrictions. Client-supplied checkout URLs are never accepted, and creating a payment remains subject to NOWPayments' actual account/currency eligibility.
 
+### Guided card-to-crypto fallback
+
+When direct card checkout is unavailable or rejected, the payer-facing guide can explain how to buy crypto into a wallet the payer controls and then return to Erraza’s crypto checkout. The external purchase only funds the payer’s wallet; it does **not** pay Erraza. After the crypto arrives and is available to send, the payer returns to Erraza, creates a fresh payment request, and sends using its exact address, network, amount, and any memo. Only the checkout server’s received status proves payment.
+
+The guide links only to MoonPay’s official consumer page, <https://www.moonpay.com/buy>; it does not construct a deep link or send customer, wallet, order, or payment data in that URL. MoonPay’s official timing guidance, <https://support.moonpay.com/en/articles/384275-when-will-i-receive-my-cryptocurrency>, says card delivery can take from a few minutes to a few hours and delays are possible. The guide therefore tells users to wait until funds are available in their own wallet before returning for a new invoice.
+
+Identity checks, regional availability, bank limits, fees, withdrawal support, and offered networks are controlled by the external service, not Erraza. The exact coin and network must match checkout, including any required memo or destination tag. Erraza does not guarantee or endorse MoonPay, a purchase outcome, timing, pricing, or network compatibility; users may choose another trusted service that supports the exact coin/network pair. Users should never enter card details, seed words, recovery phrases, or private keys into Erraza.
+
 ## Preset payment links
 
 Open **`/create-link.html`** on your checkout website (locally: `http://localhost:3000/create-link.html`). Enter an amount and currency, optionally add a **For** name/reference, choose **Create link**, then **Copy link**. **Preview checkout** opens the payer page in a new tab.

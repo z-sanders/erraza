@@ -3,6 +3,10 @@
 
   const STORAGE_KEY = 'pay_page.resume.v1';
   const ATTEMPT_KEY = 'pay_page.pending-attempt.v1';
+  const GUIDE_KEY = 'pay_page.card-guide.v1';
+  const GUIDE_MAX_AGE = 24 * 60 * 60 * 1000;
+  const GUIDE_QUOTE_AGE = 2 * 60 * 1000;
+  const GUIDE_PROVIDER_URL = 'https://www.moonpay.com/buy';
   const POLL_INTERVAL = 6000;
   const POLL_WINDOW = 20 * 60 * 1000;
   const FINAL_PROBLEMS = new Set(['failed', 'expired', 'refunded', 'rejected', 'canceled', 'cancelled', 'cancel']);
@@ -25,6 +29,14 @@
     'receiptCreatedRow', 'receiptCreated', 'copyFallback', 'copyFallbackValue', 'copyFeedback', 'statusCheckMessage',
     'checkStatusButton', 'checkStatusLabel', 'storageNote', 'missingPaymentActions', 'forgetPaymentButton',
     'paymentHelpButton', 'helpDialog', 'helpTitle', 'privacyDialog', 'privacyTitle', 'supportEmail', 'announcer',
+    'cryptoGuideButton', 'fiatGuideButton', 'helpGuideButton', 'helpGuideBlocked', 'cardRecovery', 'rejectedCardGuideButton',
+    'cardGuideNotice', 'cardGuideNoticeText', 'resumeGuideButton', 'cancelGuideButton', 'cardGuideDialog', 'cardGuideTitle',
+    'cardGuideDescription', 'cardGuideStepLabel', 'cardGuideStep1', 'cardGuideStep2', 'cardGuideStep3', 'cardGuideAmount',
+    'cardGuideReferenceRow', 'cardGuideReference', 'cardGuideSource', 'cardGuideStatus', 'cardGuideStorageNote',
+    'cardGuideChargeWarning', 'cardGuideNoCharge', 'cardGuidePrepare', 'cardGuideChooseAsset', 'cardGuideAssetChoice',
+    'cardGuideMemoWarning', 'cardGuideWalletReady', 'cardGuideBuy', 'cardGuideEstimate', 'cardGuideRefreshQuote',
+    'cardGuideNetworkConfirm', 'cardGuideNetworkLabel', 'cardGuideProvider', 'cardGuideReturn', 'cardGuideFundsReady',
+    'cardGuideBack', 'cardGuideNext', 'cardGuideFinish', 'cardGuideCancel',
   ].map((id) => [id, $(id)]));
 
   const state = {
@@ -73,6 +85,16 @@
     presetHandled: false,
     presetEdited: false,
     presetReturning: false,
+    guide: null,
+    guideQuote: null,
+    guideMessage: '',
+    guideBusy: false,
+    guideGeneration: 0,
+    guideController: null,
+    guideChoosingAsset: false,
+    guideStorageFailed: false,
+    guidePaymentChanged: false,
+    rejectedRetryApproved: false,
   };
 
   class ApiError extends Error {
@@ -228,6 +250,396 @@
       && !state.sessionExpired && typeof window.crypto?.randomUUID === 'function';
   }
 
+  function guideContext() {
+    const order = state.order;
+    if (order?.method === 'card' && order.status === 'rejected' && order.terminal && !order.complete) {
+      return {
+        amount: order.amount,
+        currency: order.currency,
+        reference: order.reference || '',
+        asset: '',
+        step: 1,
+        source: { kind: 'rejected', orderId: order.orderId },
+      };
+    }
+    if (state.order || state.token || state.saved?.token) return null;
+    return {
+      amount: amountValidation().value,
+      currency: state.currency,
+      reference: state.reference,
+      asset: state.asset,
+      step: 1,
+      source: { kind: 'form' },
+    };
+  }
+
+  function guideBlockReason(draft = state.guide || guideContext()) {
+    if (isOffline()) return 'Reconnect before using the buying guide.';
+    if (!paymentsReady()) return 'Payment availability must be loaded before using the buying guide.';
+    if (state.checkoutBusy || state.recoveryRequest || state.unreadableAttempt) return 'Recover the earlier checkout before starting another payment.';
+    if (state.pollBusy || state.lookupMissing) return 'Finish checking the original payment before using another payment method.';
+    if (state.guidePaymentChanged) return 'A payment changed in another tab. Check its status before continuing.';
+    if (!draft) return state.order || state.token || state.saved?.token
+      ? 'Check the existing payment before starting another.'
+      : 'Enter a valid amount before opening the buying guide.';
+    if (!decimalParts(draft.amount) || compareDecimals(draft.amount, '0') !== 1
+      || !state.config.currencies.some((item) => item.code === draft.currency)) {
+      return 'Enter a valid amount and currency before opening the buying guide.';
+    }
+    if (draft.source?.kind === 'rejected') {
+      const order = state.order;
+      if (!order || order.orderId !== draft.source.orderId || order.method !== 'card'
+        || order.status !== 'rejected' || !order.terminal || order.complete) {
+        return 'Check the original card attempt before using another payment method.';
+      }
+    } else if (draft.source?.kind !== 'form' || state.order || state.token || state.saved?.token) {
+      return 'Check the existing payment before starting another.';
+    }
+    if (state.assetsPhase !== 'ready' || !state.assets.length) return 'Supported coin and network options must be loaded first.';
+    return '';
+  }
+
+  function guideAsset(draft = state.guide) {
+    return draft ? state.assets.find((item) => item.code === draft.asset) || null : null;
+  }
+
+  function guideQuoteKey(draft = state.guide) {
+    return draft?.amount && draft.currency && draft.asset
+      ? JSON.stringify([draft.amount, draft.currency, draft.asset]) : null;
+  }
+
+  function guideQuoteFresh() {
+    return Boolean(state.guideQuote && state.guideQuote.key === guideQuoteKey()
+      && Number.isFinite(state.guideQuote.timestamp) && Date.now() - state.guideQuote.timestamp <= GUIDE_QUOTE_AGE);
+  }
+
+  function saveGuide() {
+    if (!state.guide) return;
+    const draft = {
+      version: 1,
+      amount: state.guide.amount,
+      currency: state.guide.currency,
+      reference: state.guide.reference,
+      asset: state.guide.asset,
+      step: state.guide.step,
+      source: state.guide.source,
+      timestamp: Date.now(),
+    };
+    try {
+      sessionStorage.setItem(GUIDE_KEY, JSON.stringify(draft));
+      state.guideStorageFailed = false;
+    } catch { state.guideStorageFailed = true; }
+  }
+
+  function clearGuideStorage() {
+    try { sessionStorage.removeItem(GUIDE_KEY); } catch { /* The in-memory guide can still be cleared. */ }
+  }
+
+  function restoreGuide() {
+    let raw;
+    try { raw = sessionStorage.getItem(GUIDE_KEY); }
+    catch { state.guideStorageFailed = true; return; }
+    if (!raw) return;
+    try {
+      const draft = JSON.parse(raw);
+      const reference = window.PaymentLinks.reference(draft?.reference);
+      const sourceValid = draft?.source?.kind === 'form'
+        || (draft?.source?.kind === 'rejected' && validText(draft.source.orderId, 300));
+      if (draft?.version !== 1 || !Number.isFinite(draft.timestamp) || Date.now() - draft.timestamp > GUIDE_MAX_AGE
+        || !decimalParts(draft.amount) || compareDecimals(draft.amount, '0') !== 1
+        || !validText(draft.currency, 24) || (draft.asset && !validText(draft.asset, 100))
+        || !Number.isInteger(draft.step) || draft.step < 1 || draft.step > 3 || !sourceValid) {
+        throw new Error('Invalid guide');
+      }
+      state.guide = {
+        amount: draft.amount,
+        currency: draft.currency,
+        reference,
+        asset: draft.asset || '',
+        step: 1,
+        source: draft.source,
+        noCharge: false,
+        walletReady: false,
+        networkConfirmed: false,
+        fundsReady: false,
+      };
+      state.guideMessage = 'Your buying guide is ready to resume. Review each confirmation again before continuing.';
+    } catch {
+      clearGuideStorage();
+      state.guide = null;
+      state.guideMessage = 'The saved buying guide could not be restored. No payment was created.';
+    }
+  }
+
+  function renderGuideEntries() {
+    const candidate = state.guide || guideContext();
+    const blocked = guideBlockReason(candidate);
+    const guideReady = Boolean(candidate && !blocked && !state.rejectedRetryApproved);
+    el.cryptoGuideButton.hidden = state.method !== 'crypto' || Boolean(state.guide) || !guideReady;
+    const fiatUnavailable = state.method === 'card' && state.configPhase === 'ready'
+      && (!state.config?.fiatEnabled || !cardAvailable());
+    el.fiatGuideButton.hidden = !fiatUnavailable || Boolean(state.guide) || !guideReady;
+    el.helpGuideButton.disabled = !guideReady;
+    el.helpGuideButton.setAttribute('aria-disabled', String(!guideReady));
+    el.helpGuideBlocked.hidden = !blocked;
+    el.helpGuideBlocked.textContent = blocked;
+    if (el.rejectedCardGuideButton) el.rejectedCardGuideButton.disabled = !guideReady;
+
+    const showNotice = Boolean(state.guide || state.guideMessage);
+    el.cardGuideNotice.hidden = !showNotice;
+    if (showNotice) {
+      el.cardGuideNoticeText.textContent = state.guideMessage || 'Buy into your own wallet, then return here to prepare a fresh crypto payment.';
+      el.resumeGuideButton.hidden = !state.guide;
+      el.cancelGuideButton.textContent = state.guide ? 'Use regular checkout' : 'Dismiss';
+    }
+  }
+
+  function guideConfirmationsReady(draft = state.guide) {
+    return Boolean(draft && guideAsset(draft) && draft.walletReady && draft.networkConfirmed && draft.fundsReady
+      && (draft.source.kind !== 'rejected' || draft.noCharge));
+  }
+
+  function renderGuide() {
+    renderGuideEntries();
+    const draft = state.guide;
+    if (!draft) return;
+    const asset = guideAsset(draft);
+    const blocked = guideBlockReason(draft);
+    const step = draft.step;
+    const quoteFresh = guideQuoteFresh();
+    el.cardGuideStepLabel.textContent = step === 1 ? 'Phase 1 of 2 · Choose crypto'
+      : step === 2 ? 'Phase 1 of 2 · Get crypto' : 'Phase 2 of 2 · Pay Erraza';
+    for (const [index, marker] of [[1, el.cardGuideStep1], [2, el.cardGuideStep2], [3, el.cardGuideStep3]]) {
+      if (index === step) marker.setAttribute('aria-current', 'step');
+      else marker.removeAttribute('aria-current');
+    }
+    el.cardGuidePrepare.hidden = step !== 1;
+    el.cardGuideBuy.hidden = step !== 2;
+    el.cardGuideReturn.hidden = step !== 3;
+    el.cardGuideAmount.textContent = formatMoney(draft.amount, draft.currency);
+    el.cardGuideReferenceRow.hidden = !draft.reference;
+    el.cardGuideReference.textContent = draft.reference;
+    el.cardGuideSource.hidden = draft.source.kind !== 'rejected';
+    el.cardGuideSource.textContent = draft.source.kind === 'rejected' ? `Original card order: ${draft.source.orderId}` : '';
+    el.cardGuideChargeWarning.hidden = draft.source.kind !== 'rejected';
+    el.cardGuideNoCharge.checked = Boolean(draft.noCharge);
+    el.cardGuideWalletReady.checked = Boolean(draft.walletReady);
+    el.cardGuideNetworkConfirm.checked = Boolean(draft.networkConfirmed);
+    el.cardGuideFundsReady.checked = Boolean(draft.fundsReady);
+    el.cardGuideAssetChoice.textContent = asset ? `${asset.name} (${asset.ticker}) · ${asset.network}` : 'Choose a coin and network';
+    el.cardGuideChooseAsset.disabled = state.guideBusy || Boolean(blocked) || state.assetsPhase !== 'ready';
+    el.cardGuideMemoWarning.hidden = !asset?.extraIdRequired;
+    el.cardGuideNetworkLabel.textContent = asset
+      ? `${asset.ticker} on ${asset.network}`
+      : 'the exact selected coin and network';
+    el.cardGuideEstimate.textContent = state.guideBusy ? 'Refreshing the estimate…'
+      : quoteFresh ? `About ${state.guideQuote.estimatedAmount} ${asset?.ticker || ''}, before purchase, withdrawal and network fees.`
+        : asset ? 'Refresh the estimate before continuing.' : 'Choose a coin and network first.';
+    el.cardGuideRefreshQuote.hidden = !asset;
+    el.cardGuideRefreshQuote.disabled = state.guideBusy || Boolean(blocked) || !asset;
+    const providerReady = step === 2 && quoteFresh && draft.networkConfirmed && !blocked;
+    if (providerReady) el.cardGuideProvider.setAttribute('href', GUIDE_PROVIDER_URL);
+    else el.cardGuideProvider.removeAttribute('href');
+    el.cardGuideProvider.setAttribute('aria-disabled', String(!providerReady));
+    el.cardGuideBack.hidden = step === 1;
+    el.cardGuideBack.disabled = state.guideBusy;
+    el.cardGuideNext.hidden = step === 3;
+    el.cardGuideNext.textContent = step === 1 ? 'Next: Get crypto' : 'I’ll use another service';
+    el.cardGuideNext.disabled = state.guideBusy || Boolean(blocked) || (step === 1
+      ? !asset || !quoteFresh || !draft.walletReady || (draft.source.kind === 'rejected' && !draft.noCharge)
+      : !draft.networkConfirmed);
+    el.cardGuideFinish.hidden = step !== 3;
+    el.cardGuideFinish.disabled = state.guideBusy || Boolean(blocked) || !guideConfirmationsReady(draft);
+    el.cardGuideStorageNote.hidden = !state.guideStorageFailed;
+    el.cardGuideStatus.textContent = blocked || state.guideMessage || (step === 1
+      ? 'Choose the exact network your wallet can receive and send.'
+      : step === 2 ? 'The external purchase only funds your wallet. It does not pay Erraza.'
+        : 'Return to Erraza, then use Continue to create the crypto payment request.');
+  }
+
+  async function refreshGuideQuote() {
+    const draft = state.guide;
+    const asset = guideAsset(draft);
+    const blocked = guideBlockReason(draft);
+    if (!draft || !asset || blocked || state.guideBusy) { renderGuide(); return; }
+    state.guideController?.abort();
+    const controller = new AbortController();
+    state.guideController = controller;
+    const generation = ++state.guideGeneration;
+    state.guideBusy = true;
+    state.guideMessage = '';
+    renderGuide();
+    try {
+      const params = new URLSearchParams({ amount: draft.amount, fiat: draft.currency, coin: draft.asset });
+      const quote = normalizeQuote(await request(`/api/estimate?${params}`, { signal: controller.signal }), draft.amount, draft.currency, draft.asset);
+      if (generation !== state.guideGeneration || draft !== state.guide) return;
+      state.guideQuote = { ...quote, key: guideQuoteKey(draft), timestamp: Date.now() };
+      state.guideMessage = 'Estimate refreshed. The buy service’s final total and fees may differ.';
+    } catch (error) {
+      if (generation !== state.guideGeneration || error.name === 'AbortError') return;
+      state.guideQuote = null;
+      state.guideMessage = error instanceof ApiError || error.message?.startsWith('The ')
+        ? error.message : 'The estimate could not be refreshed. Try again before continuing.';
+    } finally {
+      if (generation === state.guideGeneration) {
+        state.guideBusy = false;
+        state.guideController = null;
+        renderGuide();
+        saveGuide();
+      }
+    }
+  }
+
+  function openGuide() {
+    let draft = state.guide;
+    if (!draft) {
+      const candidate = guideContext();
+      const blocked = guideBlockReason(candidate);
+      if (!candidate || blocked) {
+        state.guideMessage = blocked || 'The buying guide is not available for these payment details.';
+        renderGuideEntries();
+        announce(state.guideMessage);
+        return;
+      }
+      draft = {
+        ...candidate,
+        noCharge: false,
+        walletReady: false,
+        networkConfirmed: false,
+        fundsReady: false,
+      };
+      state.guide = draft;
+      state.guideQuote = null;
+      state.guideMessage = '';
+      state.guidePaymentChanged = false;
+      saveGuide();
+    }
+    if (el.paymentDialog.open) el.paymentDialog.close();
+    if (el.helpDialog.open) el.helpDialog.close();
+    renderGuide();
+    openDialog(el.cardGuideDialog, el.cardGuideTitle);
+    if (guideAsset() && !guideQuoteFresh()) void refreshGuideQuote();
+  }
+
+  function leaveGuide(message = '') {
+    state.guideController?.abort();
+    state.guideGeneration += 1;
+    state.guideController = null;
+    state.guideBusy = false;
+    const handoffApproved = state.rejectedRetryApproved && Boolean(message);
+    state.guide = null;
+    state.guideQuote = null;
+    state.guidePaymentChanged = false;
+    state.rejectedRetryApproved = handoffApproved;
+    state.guideMessage = message;
+    clearGuideStorage();
+    if (el.cardGuideDialog.open) el.cardGuideDialog.close();
+    renderGuideEntries();
+    renderContinue();
+  }
+
+  function resumeGuideAfterAssetPicker() {
+    if (!state.guideChoosingAsset) return;
+    state.guideChoosingAsset = false;
+    if (!state.guide) return;
+    renderGuide();
+    openDialog(el.cardGuideDialog, el.cardGuideTitle);
+  }
+
+  function openGuideAssetPicker() {
+    if (!state.guide || state.guideBusy || guideBlockReason()) return;
+    state.guideChoosingAsset = true;
+    if (el.cardGuideDialog.open) el.cardGuideDialog.close();
+    el.assetSearch.value = '';
+    renderAssetResults();
+    const touch = window.matchMedia('(pointer: coarse)').matches;
+    openDialog(el.assetDialog, touch ? el.assetDialogTitle : el.assetSearch);
+  }
+
+  function nextGuideStep() {
+    const draft = state.guide;
+    if (!draft || guideBlockReason(draft) || state.guideBusy) { renderGuide(); return; }
+    if (draft.step === 1) {
+      if (!guideAsset() || !draft.walletReady || (draft.source.kind === 'rejected' && !draft.noCharge)) {
+        state.guideMessage = 'Complete the wallet and earlier-charge checks before continuing.';
+        renderGuide();
+        return;
+      }
+      if (!guideQuoteFresh()) { void refreshGuideQuote(); return; }
+      draft.step = 2;
+      state.guideMessage = 'Buy this exact coin and network into your own wallet. The purchase does not pay Erraza.';
+    } else if (draft.step === 2) {
+      if (!draft.networkConfirmed) {
+        state.guideMessage = 'Confirm that the buy service supports the exact coin and network.';
+        renderGuide();
+        return;
+      }
+      draft.step = 3;
+      state.guideMessage = 'When the crypto arrives in your wallet, confirm it below and return to Erraza crypto checkout.';
+    }
+    saveGuide();
+    renderGuide();
+    el.cardGuideDialog.scrollTop = 0;
+    el.cardGuideTitle.focus({ preventScroll: true });
+  }
+
+  function previousGuideStep() {
+    if (!state.guide || state.guideBusy || state.guide.step <= 1) return;
+    state.guide.step -= 1;
+    state.guideMessage = '';
+    saveGuide();
+    renderGuide();
+    el.cardGuideDialog.scrollTop = 0;
+  }
+
+  async function finishGuide() {
+    const draft = state.guide;
+    if (!draft || draft.step !== 3 || !guideConfirmationsReady(draft) || state.guideBusy) return;
+    state.guideBusy = true;
+    state.guideMessage = 'Refreshing payment availability…';
+    renderGuide();
+    try {
+      if (draft.source.kind === 'rejected') {
+        if (!state.token) throw new Error('The original card payment reference is unavailable. Check it before continuing.');
+        const checked = await checkStatus(true);
+        if (!checked) throw new Error('The original payment status could not be refreshed. Check it before continuing.');
+        const order = state.order;
+        if (!order || order.orderId !== draft.source.orderId || order.method !== 'card'
+          || order.status !== 'rejected' || !order.terminal || order.complete) {
+          throw new Error('The original payment status changed. Check it before making another payment.');
+        }
+      }
+      const blocked = guideBlockReason(draft);
+      if (blocked) throw new Error(blocked);
+      if (!guideConfirmationsReady(draft)) throw new Error('Review the wallet, network, funds, and earlier-card checks before continuing.');
+      await loadAssets();
+      if (!state.assets.some((item) => item.code === draft.asset)) throw new Error('That coin and network is no longer available. Choose another before paying.');
+      if (!guideConfirmationsReady(draft)) throw new Error('Review the wallet, network, funds, and earlier-card checks before continuing.');
+      state.currency = draft.currency;
+      state.reference = draft.reference;
+      state.method = 'crypto';
+      state.asset = draft.asset;
+      state.rejectedRetryApproved = draft.source.kind === 'rejected';
+      state.idempotencyKey = null;
+      state.presetEdited = true;
+      el.amountInput.value = draft.amount;
+      el.currencySelect.value = draft.currency;
+      el.methodCrypto.checked = true;
+      el.methodCard.checked = false;
+      const handoffMessage = 'Crypto is selected. Review the refreshed estimate, then use Continue to create a fresh payment request.';
+      leaveGuide(handoffMessage);
+      renderAmount();
+      renderMethod();
+      renderAssetPicker();
+      queueQuote(0);
+      announce(handoffMessage);
+    } catch (error) {
+      state.guideMessage = error.message || 'Payment availability could not be refreshed.';
+      state.guideBusy = false;
+      renderGuide();
+    }
+  }
+
   function cardAvailable() {
     return state.config?.fiatEnabled === true && state.config.fiatCurrencies.includes(state.currency);
   }
@@ -237,11 +649,14 @@
   }
 
   function hasUnresolvedPayment() {
+    if (state.saved?.token && state.saved.token !== state.token) return true;
+    if (state.token && state.order?.token !== state.token) return true;
+    if (state.rejectedRetryApproved && state.order?.method === 'card' && state.order.status === 'rejected' && settledOrder(state.order)) return false;
     return Boolean((state.token || state.saved?.token) && !settledOrder(state.order));
   }
 
   function canCreateCheckout() {
-    if (!paymentsReady() || state.checkoutBusy || hasUnresolvedPayment() || state.unreadableAttempt) return false;
+    if (!paymentsReady() || state.checkoutBusy || state.guide || hasUnresolvedPayment() || state.unreadableAttempt) return false;
     if (state.recoveryRequest) return true;
     if (!amountValidation().value) return false;
     if (state.method === 'card') return cardAvailable();
@@ -275,6 +690,7 @@
     }
     el.availabilityText.textContent = message;
     el.availabilityNotice.hidden = !message;
+    renderGuideEntries();
   }
 
   function renderMethod() {
@@ -283,12 +699,12 @@
 
   function renderContinue() {
     renderAvailability();
-    el.paymentFields.disabled = state.checkoutBusy || Boolean(state.recoveryRequest) || state.unreadableAttempt;
+    el.paymentFields.disabled = state.checkoutBusy || Boolean(state.recoveryRequest) || state.unreadableAttempt || Boolean(state.guide);
     el.currencySelect.disabled = !state.config?.currencies.length;
     el.continueButton.disabled = !canCreateCheckout();
     el.continueButton.setAttribute('aria-busy', String(state.checkoutBusy));
     el.continueLabel.textContent = state.checkoutBusy ? 'Preparing checkout…' : state.recoveryRequest ? 'Recover checkout' : 'Continue';
-    const paymentNeedsAttention = state.unreadableAttempt || state.recoveryRequest || hasUnresolvedPayment();
+    const paymentNeedsAttention = state.unreadableAttempt || state.recoveryRequest || hasUnresolvedPayment() || Boolean(state.guide);
     const amount = amountValidation().value;
     const showAmount = Boolean(amount && !state.checkoutBusy && !paymentNeedsAttention);
     el.continueAmount.hidden = !showAmount;
@@ -301,6 +717,8 @@
       el.continueNote.textContent = 'Keep this page open. Recovery uses the same payment request.';
     } else if (hasUnresolvedPayment()) {
       el.continueNote.textContent = 'Check your existing payment before starting another.';
+    } else if (state.guide) {
+      el.continueNote.textContent = 'Finish or leave the buying guide before creating a payment.';
     } else if (state.method === 'card') {
       el.continueNote.textContent = 'Review your total before you pay.';
     } else {
@@ -387,6 +805,7 @@
     renderMethod();
     renderAvailability();
     renderContinue();
+    if (state.guide) renderGuide();
   }
 
   async function loadConfig() {
@@ -430,7 +849,7 @@
   function normalizeAsset(item) {
     if (!item || !validText(item.code, 100) || !validText(item.ticker, 100)
       || !validText(item.name, 200) || !validText(item.network, 200)) return null;
-    return { code: item.code, ticker: item.ticker, name: item.name, network: item.network };
+    return { code: item.code, ticker: item.ticker, name: item.name, network: item.network, extraIdRequired: item.extraIdRequired === true };
   }
 
   async function loadAssets() {
@@ -456,6 +875,15 @@
       });
       state.assets = assets;
       if (!assets.some((asset) => asset.code === state.asset)) state.asset = '';
+      if (state.guide && !assets.some((asset) => asset.code === state.guide.asset)) {
+        state.guide.asset = '';
+        state.guide.walletReady = false;
+        state.guide.networkConfirmed = false;
+        state.guide.fundsReady = false;
+        state.guideQuote = null;
+        state.guideMessage = 'Choose an available coin and network before continuing.';
+        saveGuide();
+      }
       state.assetsPhase = 'ready';
     } catch (error) {
       if (generation !== state.assetsGeneration || error.name === 'AbortError') return;
@@ -468,6 +896,7 @@
         renderAssetPicker();
         renderAssetResults();
         queueQuote();
+        if (state.guide) renderGuide();
       }
     }
   }
@@ -658,6 +1087,12 @@
 
   function paymentDetailsChanged() {
     if (state.checkoutBusy || state.recoveryRequest) return;
+    state.rejectedRetryApproved = false;
+    if (state.guide) {
+      state.guidePaymentChanged = true;
+      state.guideMessage = 'Payment details changed outside the guide. Leave and restart the guide to use the new details.';
+      renderGuide();
+    }
     state.presetEdited = true;
     state.idempotencyKey = null;
     showCheckoutError();
@@ -707,6 +1142,10 @@
         amount: body.amount, currency: body.currency, method: body.method,
         ...(body.method === 'crypto' ? { asset: body.asset } : {}), ...(reference ? { reference } : {}), idempotencyKey: body.idempotencyKey,
       };
+      if (state.guide) {
+        state.guidePaymentChanged = true;
+        state.guideMessage = 'An earlier checkout attempt must be recovered before the buying guide can continue.';
+      }
       state.idempotencyKey = body.idempotencyKey;
       state.currency = body.currency;
       state.reference = reference;
@@ -945,7 +1384,8 @@
       el.paymentQr.removeAttribute('src');
       el.paymentExpiry.hidden = true;
     }
-    el.cardPayment.hidden = order.method !== 'card' || order.complete;
+    el.cardPayment.hidden = order.method !== 'card' || order.complete || order.status === 'rejected';
+    el.cardRecovery.hidden = !(order.method === 'card' && order.status === 'rejected' && order.terminal && !order.complete);
     const checkoutUrl = safeCheckoutUrl(order.checkoutUrl);
     const showCheckoutLink = order.method === 'card' && canSendPayment(order) && checkoutUrl;
     el.externalCheckout.hidden = !showCheckoutLink;
@@ -963,6 +1403,7 @@
     renderContinue();
     renderStatusButton();
     if (el.paymentDialog.open) fitReadonlyFields(el.paymentDialog);
+    renderGuideEntries();
   }
 
   function showOrderLoading() {
@@ -973,6 +1414,7 @@
     el.paymentStatusGlyph.className = 'icon icon-arrow-clockwise';
     el.cryptoPayment.hidden = true;
     el.cardPayment.hidden = true;
+    el.cardRecovery.hidden = true;
     el.paymentReceipt.hidden = true;
     el.copyOrderButton.disabled = true;
     el.providerMessage.hidden = true;
@@ -1023,6 +1465,11 @@
   }
 
   function adoptOrder(order) {
+    if (state.guide && (state.guide.source.kind !== 'rejected' || state.guide.source.orderId !== order.orderId || order.status !== 'rejected')) {
+      state.guidePaymentChanged = true;
+      state.rejectedRetryApproved = false;
+      state.guideMessage = 'The original payment status changed. Check it before making another payment.';
+    }
     if (state.token !== order.token) {
       stopPollingRequest();
       state.token = order.token;
@@ -1070,7 +1517,7 @@
   }
 
   async function checkStatus(manual = false) {
-    if (!state.token || state.pollBusy || document.hidden) return;
+    if (!state.token || state.pollBusy || document.hidden) return false;
     window.clearTimeout(state.pollTimer);
     state.pollTimer = null;
     if (manual) {
@@ -1080,13 +1527,13 @@
     }
     if (!manual && (state.pollStopped || Date.now() >= state.pollDeadline)) {
       schedulePoll();
-      return;
+      return false;
     }
     if (navigator.onLine === false) {
       el.statusCheckMessage.textContent = 'You’re offline. Status checks will resume when you reconnect. Don’t send another payment while the result is unknown.';
       state.pollErrors += 1;
       schedulePoll(Math.min(POLL_INTERVAL * (2 ** Math.min(state.pollErrors, 4)), 60000));
-      return;
+      return false;
     }
     const token = state.token;
     const generation = state.pollGeneration;
@@ -1098,14 +1545,15 @@
     let delay = POLL_INTERVAL;
     try {
       const data = await request(`/api/status?${new URLSearchParams({ token })}`, { signal: controller.signal });
-      if (generation !== state.pollGeneration || token !== state.token) return;
+      if (generation !== state.pollGeneration || token !== state.token) return false;
       const order = normalizeOrder(data, token);
       state.pollErrors = 0;
       adoptOrder(order);
       if (manual) announce(`Status checked. ${statusPresentation(order).label}.`);
       if (el.paymentDialog.open) startExpiryClock();
+      return true;
     } catch (error) {
-      if (generation !== state.pollGeneration || error.name === 'AbortError') return;
+      if (generation !== state.pollGeneration || error.name === 'AbortError') return false;
       state.pollErrors += 1;
       delay = Math.min(POLL_INTERVAL * (2 ** Math.min(state.pollErrors, 4)), 60000);
       state.lookupMissing = error instanceof ApiError && [404, 410].includes(error.status);
@@ -1122,6 +1570,7 @@
       }
       el.missingPaymentActions.hidden = !state.lookupMissing;
       renderResume();
+      return false;
     } finally {
       if (generation === state.pollGeneration) {
         state.pollBusy = false;
@@ -1377,6 +1826,21 @@
     el.assetResults.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-asset-code]');
       if (!button || !state.assets.some((asset) => asset.code === button.dataset.assetCode)) return;
+      if (state.guideChoosingAsset && state.guide) {
+        state.guide.asset = button.dataset.assetCode;
+        state.guide.walletReady = false;
+        state.guide.networkConfirmed = false;
+        state.guide.fundsReady = false;
+        state.guideQuote = null;
+        state.guideMessage = '';
+        el.assetDialog.close();
+        saveGuide();
+        renderGuide();
+        const asset = guideAsset();
+        announce(`${asset.name} selected for the buying guide. Network: ${asset.network}.`);
+        void refreshGuideQuote();
+        return;
+      }
       state.asset = button.dataset.assetCode;
       el.assetDialog.close();
       paymentDetailsChanged();
@@ -1388,6 +1852,55 @@
     el.retryEstimate.addEventListener('click', () => queueQuote(0));
     el.resumeButton.addEventListener('click', () => resumePayment(state.token || state.saved?.token));
     el.checkStatusButton.addEventListener('click', () => { void checkStatus(true); });
+    [el.cryptoGuideButton, el.fiatGuideButton, el.helpGuideButton, el.rejectedCardGuideButton, el.resumeGuideButton]
+      .forEach((button) => button.addEventListener('click', openGuide));
+    el.cancelGuideButton.addEventListener('click', () => leaveGuide());
+    el.cardGuideCancel.addEventListener('click', () => leaveGuide());
+    el.cardGuideChooseAsset.addEventListener('click', openGuideAssetPicker);
+    el.cardGuideRefreshQuote.addEventListener('click', () => { void refreshGuideQuote(); });
+    el.cardGuideBack.addEventListener('click', previousGuideStep);
+    el.cardGuideNext.addEventListener('click', nextGuideStep);
+    el.cardGuideFinish.addEventListener('click', () => { void finishGuide(); });
+    el.cardGuideNoCharge.addEventListener('change', () => {
+      if (!state.guide) return;
+      state.guide.noCharge = el.cardGuideNoCharge.checked;
+      state.guideMessage = '';
+      renderGuide();
+    });
+    el.cardGuideWalletReady.addEventListener('change', () => {
+      if (!state.guide) return;
+      state.guide.walletReady = el.cardGuideWalletReady.checked;
+      state.guideMessage = '';
+      renderGuide();
+    });
+    el.cardGuideNetworkConfirm.addEventListener('change', () => {
+      if (!state.guide) return;
+      state.guide.networkConfirmed = el.cardGuideNetworkConfirm.checked;
+      state.guideMessage = '';
+      renderGuide();
+    });
+    el.cardGuideFundsReady.addEventListener('change', () => {
+      if (!state.guide) return;
+      state.guide.fundsReady = el.cardGuideFundsReady.checked;
+      state.guideMessage = '';
+      renderGuide();
+    });
+    el.cardGuideProvider.addEventListener('click', (event) => {
+      if (el.cardGuideProvider.getAttribute('aria-disabled') === 'true'
+        || el.cardGuideProvider.getAttribute('href') !== GUIDE_PROVIDER_URL
+        || !guideQuoteFresh() || guideBlockReason()) {
+        event.preventDefault();
+        if (!guideQuoteFresh()) void refreshGuideQuote();
+        return;
+      }
+      window.setTimeout(() => {
+        if (!state.guide || state.guide.step !== 2) return;
+        state.guide.step = 3;
+        state.guideMessage = 'Finish the purchase into your wallet, then return here. Buying crypto does not pay Erraza.';
+        saveGuide();
+        renderGuide();
+      }, 0);
+    });
     el.helpButton.addEventListener('click', () => openHelp());
     el.privacyButton.addEventListener('click', () => openHelp(true));
     el.paymentHelpButton.addEventListener('click', () => openHelp());
@@ -1401,6 +1914,7 @@
         if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
       });
     });
+    el.assetDialog.addEventListener('close', resumeGuideAfterAssetPicker);
     el.paymentDialog.addEventListener('close', () => {
       window.clearTimeout(state.expiryTimer);
       el.copyFallback.hidden = true;
@@ -1440,6 +1954,20 @@
         invalidateQuote();
         renderContinue();
       } else {
+        if (state.guide) {
+          if (state.guide.source.kind === 'rejected') state.guide.noCharge = false;
+          state.guide.fundsReady = false;
+          if (state.guide.step !== 3) {
+            state.guide.walletReady = false;
+            state.guide.networkConfirmed = false;
+            state.guideQuote = null;
+          }
+          state.guideMessage = state.guide.step === 3
+            ? 'Welcome back. Confirm that the crypto has arrived in your wallet before returning to Erraza checkout.'
+            : 'Review the selected network and refresh the estimate before continuing.';
+          saveGuide();
+          renderGuide();
+        }
         queueQuote(0);
         startExpiryClock();
         refreshOnReturn();
@@ -1448,6 +1976,23 @@
     });
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('storage', (event) => {
+      if (event.key !== STORAGE_KEY) return;
+      const saved = readSavedPayment();
+      if (saved?.token && saved.token !== state.token) {
+        state.saved = saved;
+        state.rejectedRetryApproved = false;
+        state.idempotencyKey = null;
+        invalidateQuote();
+        if (state.guide) {
+          state.guidePaymentChanged = true;
+          state.guideMessage = 'A payment changed in another tab. Check it before making another payment.';
+          renderGuide();
+        }
+        renderResume();
+        renderContinue();
+      }
+    });
     window.addEventListener('pagehide', () => {
       stopPollingRequest();
       window.clearTimeout(state.expiryTimer);
@@ -1455,6 +2000,20 @@
     });
     window.addEventListener('pageshow', (event) => {
       if (!event.persisted) return;
+      if (state.guide) {
+        if (state.guide.source.kind === 'rejected') state.guide.noCharge = false;
+        state.guide.fundsReady = false;
+        if (state.guide.step !== 3) {
+          state.guide.walletReady = false;
+          state.guide.networkConfirmed = false;
+          state.guideQuote = null;
+        }
+        state.guideMessage = state.guide.step === 3
+          ? 'Confirm that the crypto has arrived in your wallet before returning to Erraza checkout.'
+          : 'Review the wallet, network, and fresh estimate before continuing.';
+        saveGuide();
+        renderGuide();
+      }
       renderContinue();
       queueQuote(0);
       startExpiryClock();
@@ -1470,6 +2029,7 @@
     wireEvents();
     state.saved = readSavedPayment();
     restoreAttempt();
+    restoreGuide();
     const entryUrl = new URL(window.location.href);
     state.presetSearch = entryUrl.search;
     state.presetReturning = entryUrl.searchParams.has('return') || new URLSearchParams(entryUrl.hash.slice(1)).has('checkout');
@@ -1480,6 +2040,7 @@
     renderMethod();
     renderQuote();
     renderContinue();
+    renderGuideEntries();
     consumeReturnLink();
     void loadConfig();
   }
