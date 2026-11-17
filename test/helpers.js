@@ -18,6 +18,7 @@ const config = {
 
 function memoryStore() {
   const orders = new Map(), idem = new Map(), cache = new Map(), locks = new Map();
+  let reservationQueue = Promise.resolve();
   return {
     orders,
     async rateLimit() {},
@@ -30,14 +31,26 @@ function memoryStore() {
       return structuredClone(orders.get(prior.orderId));
     },
     async reserve(key, fingerprint, order) {
-      if (idem.has(key)) {
-        const prior = idem.get(key);
-        if (prior.fingerprint !== fingerprint) throw new HttpError(409, 'idempotency_conflict', 'Conflict');
-        return { created: false, order: structuredClone(orders.get(prior.orderId)) };
+      const previous = reservationQueue;
+      let release;
+      reservationQueue = new Promise(resolve => { release = resolve; });
+      await previous;
+      try {
+        if (idem.has(key)) {
+          const prior = idem.get(key);
+          if (prior.fingerprint !== fingerprint) throw new HttpError(409, 'idempotency_conflict', 'Conflict');
+          return { created: false, reason: 'idempotent', order: structuredClone(orders.get(prior.orderId)) };
+        }
+        const unresolved = [...orders.values()].find(candidate =>
+          candidate.principal === order.principal && !['finished', 'failed', 'expired', 'refunded'].includes(candidate.status)
+        );
+        if (unresolved) return { created: false, reason: 'unresolved', order: structuredClone(unresolved) };
+        idem.set(key, { fingerprint, orderId: order.id });
+        orders.set(order.id, structuredClone(order));
+        return { created: true, reason: 'created', order: structuredClone(order) };
+      } finally {
+        release();
       }
-      idem.set(key, { fingerprint, orderId: order.id });
-      orders.set(order.id, structuredClone(order));
-      return { created: true, order: structuredClone(order) };
     },
     async getOrder(id) { return orders.has(id) ? structuredClone(orders.get(id)) : null; },
     async update(id, transform) {

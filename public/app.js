@@ -9,7 +9,7 @@
   const GUIDE_PROVIDER_URL = 'https://www.moonpay.com/buy';
   const POLL_INTERVAL = 6000;
   const POLL_WINDOW = 20 * 60 * 1000;
-  const FINAL_PROBLEMS = new Set(['failed', 'expired', 'refunded', 'rejected', 'canceled', 'cancelled', 'cancel']);
+  const FINAL_PROBLEMS = new Set(['failed', 'expired', 'refunded', 'canceled', 'cancelled', 'cancel']);
   const AWAITING_PAYMENT = new Set(['waiting', 'waiting_for_deposit', 'pending', 'created', 'new', 'ready']);
   const $ = (id) => document.getElementById(id);
   const el = Object.fromEntries([
@@ -252,14 +252,14 @@
 
   function guideContext() {
     const order = state.order;
-    if (order?.method === 'card' && order.status === 'rejected' && order.terminal && !order.complete) {
+    if (order?.method === 'card' && ['failed', 'expired', 'refunded'].includes(order.status) && order.terminal && !order.complete) {
       return {
         amount: order.amount,
         currency: order.currency,
         reference: order.reference || '',
         asset: '',
         step: 1,
-        source: { kind: 'rejected', orderId: order.orderId },
+        source: { kind: 'terminal_card', orderId: order.orderId },
       };
     }
     if (state.order || state.token || state.saved?.token) return null;
@@ -286,10 +286,10 @@
       || !state.config.currencies.some((item) => item.code === draft.currency)) {
       return 'Enter a valid amount and currency before opening the buying guide.';
     }
-    if (draft.source?.kind === 'rejected') {
+    if (draft.source?.kind === 'terminal_card') {
       const order = state.order;
       if (!order || order.orderId !== draft.source.orderId || order.method !== 'card'
-        || order.status !== 'rejected' || !order.terminal || order.complete) {
+        || !['failed', 'expired', 'refunded'].includes(order.status) || !order.terminal || order.complete) {
         return 'Check the original card attempt before using another payment method.';
       }
     } else if (draft.source?.kind !== 'form' || state.order || state.token || state.saved?.token) {
@@ -344,7 +344,7 @@
       const draft = JSON.parse(raw);
       const reference = window.PaymentLinks.reference(draft?.reference);
       const sourceValid = draft?.source?.kind === 'form'
-        || (draft?.source?.kind === 'rejected' && validText(draft.source.orderId, 300));
+        || (draft?.source?.kind === 'terminal_card' && validText(draft.source.orderId, 300));
       if (draft?.version !== 1 || !Number.isFinite(draft.timestamp) || Date.now() - draft.timestamp > GUIDE_MAX_AGE
         || !decimalParts(draft.amount) || compareDecimals(draft.amount, '0') !== 1
         || !validText(draft.currency, 24) || (draft.asset && !validText(draft.asset, 100))
@@ -396,7 +396,7 @@
 
   function guideConfirmationsReady(draft = state.guide) {
     return Boolean(draft && guideAsset(draft) && draft.walletReady && draft.networkConfirmed && draft.fundsReady
-      && (draft.source.kind !== 'rejected' || draft.noCharge));
+      && (draft.source.kind !== 'terminal_card' || draft.noCharge));
   }
 
   function renderGuide() {
@@ -419,9 +419,9 @@
     el.cardGuideAmount.textContent = formatMoney(draft.amount, draft.currency);
     el.cardGuideReferenceRow.hidden = !draft.reference;
     el.cardGuideReference.textContent = draft.reference;
-    el.cardGuideSource.hidden = draft.source.kind !== 'rejected';
-    el.cardGuideSource.textContent = draft.source.kind === 'rejected' ? `Original card order: ${draft.source.orderId}` : '';
-    el.cardGuideChargeWarning.hidden = draft.source.kind !== 'rejected';
+    el.cardGuideSource.hidden = draft.source.kind !== 'terminal_card';
+    el.cardGuideSource.textContent = draft.source.kind === 'terminal_card' ? `Original card order: ${draft.source.orderId}` : '';
+    el.cardGuideChargeWarning.hidden = draft.source.kind !== 'terminal_card';
     el.cardGuideNoCharge.checked = Boolean(draft.noCharge);
     el.cardGuideWalletReady.checked = Boolean(draft.walletReady);
     el.cardGuideNetworkConfirm.checked = Boolean(draft.networkConfirmed);
@@ -446,7 +446,7 @@
     el.cardGuideNext.hidden = step === 3;
     el.cardGuideNext.textContent = step === 1 ? 'Next: Get crypto' : 'I’ll use another service';
     el.cardGuideNext.disabled = state.guideBusy || Boolean(blocked) || (step === 1
-      ? !asset || !quoteFresh || !draft.walletReady || (draft.source.kind === 'rejected' && !draft.noCharge)
+      ? !asset || !quoteFresh || !draft.walletReady || (draft.source.kind === 'terminal_card' && !draft.noCharge)
       : !draft.networkConfirmed);
     el.cardGuideFinish.hidden = step !== 3;
     el.cardGuideFinish.disabled = state.guideBusy || Boolean(blocked) || !guideConfirmationsReady(draft);
@@ -560,7 +560,7 @@
     const draft = state.guide;
     if (!draft || guideBlockReason(draft) || state.guideBusy) { renderGuide(); return; }
     if (draft.step === 1) {
-      if (!guideAsset() || !draft.walletReady || (draft.source.kind === 'rejected' && !draft.noCharge)) {
+      if (!guideAsset() || !draft.walletReady || (draft.source.kind === 'terminal_card' && !draft.noCharge)) {
         state.guideMessage = 'Complete the wallet and earlier-charge checks before continuing.';
         renderGuide();
         return;
@@ -599,13 +599,13 @@
     state.guideMessage = 'Refreshing payment availability…';
     renderGuide();
     try {
-      if (draft.source.kind === 'rejected') {
+      if (draft.source.kind === 'terminal_card') {
         if (!state.token) throw new Error('The original card payment reference is unavailable. Check it before continuing.');
         const checked = await checkStatus(true);
         if (!checked) throw new Error('The original payment status could not be refreshed. Check it before continuing.');
         const order = state.order;
         if (!order || order.orderId !== draft.source.orderId || order.method !== 'card'
-          || order.status !== 'rejected' || !order.terminal || order.complete) {
+          || !['failed', 'expired', 'refunded'].includes(order.status) || !order.terminal || order.complete) {
           throw new Error('The original payment status changed. Check it before making another payment.');
         }
       }
@@ -619,7 +619,7 @@
       state.reference = draft.reference;
       state.method = 'crypto';
       state.asset = draft.asset;
-      state.rejectedRetryApproved = draft.source.kind === 'rejected';
+      state.rejectedRetryApproved = draft.source.kind === 'terminal_card';
       state.idempotencyKey = null;
       state.presetEdited = true;
       el.amountInput.value = draft.amount;
@@ -651,7 +651,8 @@
   function hasUnresolvedPayment() {
     if (state.saved?.token && state.saved.token !== state.token) return true;
     if (state.token && state.order?.token !== state.token) return true;
-    if (state.rejectedRetryApproved && state.order?.method === 'card' && state.order.status === 'rejected' && settledOrder(state.order)) return false;
+    if (state.rejectedRetryApproved && state.order?.method === 'card'
+      && ['failed', 'expired', 'refunded'].includes(state.order.status) && settledOrder(state.order)) return false;
     return Boolean((state.token || state.saved?.token) && !settledOrder(state.order));
   }
 
@@ -1104,7 +1105,7 @@
   }
 
   function attemptFingerprint(body) {
-    const parts = [body.amount, body.currency, body.method, body.asset ?? null, body.idempotencyKey];
+    const parts = [body.amount, body.currency, body.method, body.asset ?? null, body.sourceOrderId ?? null, body.idempotencyKey];
     if (body.reference) parts.push(body.reference);
     return JSON.stringify(parts);
   }
@@ -1131,6 +1132,7 @@
       if (!body || !decimalParts(body.amount) || compareDecimals(body.amount, '0') !== 1
         || !validText(body.currency, 24) || !['card', 'crypto'].includes(body.method)
         || (body.method === 'crypto' && !validText(body.asset, 100))
+        || (body.sourceOrderId !== undefined && !/^err_[0-9a-f-]{36}$/.test(body.sourceOrderId))
         || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.idempotencyKey)
         || attempt.fingerprint !== attemptFingerprint(body)) {
         state.unreadableAttempt = true;
@@ -1140,7 +1142,9 @@
       const reference = window.PaymentLinks.reference(body.reference);
       state.recoveryRequest = {
         amount: body.amount, currency: body.currency, method: body.method,
-        ...(body.method === 'crypto' ? { asset: body.asset } : {}), ...(reference ? { reference } : {}), idempotencyKey: body.idempotencyKey,
+        ...(body.method === 'crypto' ? { asset: body.asset } : {}),
+        ...(body.sourceOrderId ? { sourceOrderId: body.sourceOrderId } : {}),
+        ...(reference ? { reference } : {}), idempotencyKey: body.idempotencyKey,
       };
       if (state.guide) {
         state.guidePaymentChanged = true;
@@ -1178,6 +1182,7 @@
       method: state.method,
       ...(state.reference ? { reference: state.reference } : {}),
       ...(state.method === 'crypto' ? { asset: state.asset } : {}),
+      ...(state.rejectedRetryApproved && state.order?.orderId ? { sourceOrderId: state.order.orderId } : {}),
       idempotencyKey: state.idempotencyKey,
     };
     const recovering = Boolean(state.recoveryRequest);
@@ -1385,7 +1390,7 @@
       el.paymentExpiry.hidden = true;
     }
     el.cardPayment.hidden = order.method !== 'card' || order.complete || order.status === 'rejected';
-    el.cardRecovery.hidden = !(order.method === 'card' && order.status === 'rejected' && order.terminal && !order.complete);
+    el.cardRecovery.hidden = !(order.method === 'card' && ['failed', 'expired', 'refunded'].includes(order.status) && order.terminal && !order.complete);
     const checkoutUrl = safeCheckoutUrl(order.checkoutUrl);
     const showCheckoutLink = order.method === 'card' && canSendPayment(order) && checkoutUrl;
     el.externalCheckout.hidden = !showCheckoutLink;
@@ -1465,7 +1470,8 @@
   }
 
   function adoptOrder(order) {
-    if (state.guide && (state.guide.source.kind !== 'rejected' || state.guide.source.orderId !== order.orderId || order.status !== 'rejected')) {
+    if (state.guide && (state.guide.source.kind !== 'terminal_card' || state.guide.source.orderId !== order.orderId
+      || !['failed', 'expired', 'refunded'].includes(order.status))) {
       state.guidePaymentChanged = true;
       state.rejectedRetryApproved = false;
       state.guideMessage = 'The original payment status changed. Check it before making another payment.';
@@ -1955,7 +1961,7 @@
         renderContinue();
       } else {
         if (state.guide) {
-          if (state.guide.source.kind === 'rejected') state.guide.noCharge = false;
+          if (state.guide.source.kind === 'terminal_card') state.guide.noCharge = false;
           state.guide.fundsReady = false;
           if (state.guide.step !== 3) {
             state.guide.walletReady = false;
@@ -2001,7 +2007,7 @@
     window.addEventListener('pageshow', (event) => {
       if (!event.persisted) return;
       if (state.guide) {
-        if (state.guide.source.kind === 'rejected') state.guide.noCharge = false;
+        if (state.guide.source.kind === 'terminal_card') state.guide.noCharge = false;
         state.guide.fundsReady = false;
         if (state.guide.step !== 3) {
           state.guide.walletReady = false;
