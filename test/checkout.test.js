@@ -183,6 +183,22 @@ test('ambiguous create timeout is not retried as a new provider payment', async 
   assert.equal(attempts, 1);
 });
 
+test('every provider create failure remains ambiguous and blocks replay', async () => {
+  for (const status of [400, 408, 409, 422, 425, 429, 500]) {
+    const env = await setup();
+    let attempts = 0;
+    env.provider.create = async () => { attempts++; throw new ProviderError(status, 'provider_create_unknown'); };
+    const body = checkoutBody();
+    const first = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body });
+    const retry = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body });
+    assert.equal(first.status, 202, status);
+    assert.equal(first.body.status, 'unknown', status);
+    assert.equal(first.body.terminal, false, status);
+    assert.equal(retry.body.orderId, first.body.orderId, status);
+    assert.equal(attempts, 1, status);
+  }
+});
+
 test('NOWPayments new status stays sendable and pending during creation and refresh', async () => {
   const env = await setup();
   const originalCreate = env.provider.create;
@@ -257,7 +273,8 @@ test('IPN verifies signature then reconciles authoritative status; duplicates ne
   const invalid = await call(env.handlers.ipn, { method: 'POST', body: payload, headers: { 'x-nowpayments-sig': '0'.repeat(128) } });
   assert.equal(invalid.status, 401);
   const beforeProviderFinishes = await call(env.handlers.ipn, { method: 'POST', body: payload, headers: { 'x-nowpayments-sig': signature }, raw: true });
-  assert.equal(beforeProviderFinishes.status, 200);
+  assert.equal(beforeProviderFinishes.status, 503);
+  assert.equal(beforeProviderFinishes.body.error, 'provider_status_lag');
   assert.equal((await env.store.getOrder(order.id)).complete, false);
   const payment = env.provider.payments.get(order.paymentId);
   payment.payment_status = 'finished'; payment.actually_paid = '0.001';
