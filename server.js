@@ -113,9 +113,9 @@ function createServer({ handlers } = {}) {
   // Dependency injection is explicit and only for tests; the CLI never supplies it.
   const routes = handlers === undefined ? loadRoutes()
     : handlers instanceof Map ? new Map(handlers) : new Map(Object.entries(handlers));
-  const allowedRoutes = new Set(['/api/config', '/api/currencies', '/api/estimate', '/api/min-amount', '/api/checkout', '/api/status', '/api/ipn', '/api/reconcile']);
+  const allowedRoutes = new Set(['/api/config', '/api/currencies', '/api/estimate', '/api/min-amount', '/api/checkout', '/api/status', '/api/ipn', '/api/reconcile', '/api/cron-reconcile', '/api/ops']);
   if (routes.size !== allowedRoutes.size || [...routes].some(([route, handler]) => !allowedRoutes.has(route) || typeof handler !== 'function')) {
-    throw new TypeError('Supply exactly the eight API route handlers.');
+    throw new TypeError('Supply exactly the ten API route handlers.');
   }
   const server = http.createServer(async (req, res) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
