@@ -329,7 +329,7 @@ function formGuide(overrides = {}) {
   };
 }
 
-function rejectedOrder(overrides = {}) {
+function terminalCardOrder(overrides = {}) {
   return {
     token: 'original-card-token',
     orderId: 'card-order-authoritative',
@@ -338,7 +338,7 @@ function rejectedOrder(overrides = {}) {
     reference: 'Authoritative invoice',
     merchant: 'Erraza',
     method: 'card',
-    status: 'rejected',
+    status: 'failed',
     terminal: true,
     complete: false,
     ...overrides,
@@ -425,7 +425,7 @@ test('guide eligibility uses ready assets and authoritative rejected-order detai
   rejected.element('amountInput').value = '1.00';
   rejected.ui.state.currency = 'usd';
   rejected.ui.state.reference = 'Untrusted form value';
-  rejected.ui.state.order = rejectedOrder();
+  rejected.ui.state.order = terminalCardOrder();
   rejected.ui.state.token = 'original-card-token';
   const orderContext = plain(rejected.ui.guideContext());
   assert.deepEqual(orderContext, {
@@ -434,11 +434,11 @@ test('guide eligibility uses ready assets and authoritative rejected-order detai
     reference: 'Authoritative invoice',
     asset: '',
     step: 1,
-    source: { kind: 'rejected', orderId: 'card-order-authoritative' },
+    source: { kind: 'terminal_card', orderId: 'card-order-authoritative' },
   });
   assert.equal(rejected.ui.guideBlockReason(), '');
   rejected.ui.openGuide();
-  assert.deepEqual(plain(rejected.ui.state.guide.source), { kind: 'rejected', orderId: 'card-order-authoritative' });
+  assert.deepEqual(plain(rejected.ui.state.guide.source), { kind: 'terminal_card', orderId: 'card-order-authoritative' });
   assert.equal(rejected.ui.state.guide.amount, '479.35');
   assert.equal(rejected.ui.state.guide.currency, 'eur');
   assert.equal(rejected.ui.state.guide.reference, 'Authoritative invoice');
@@ -450,7 +450,7 @@ test('unknown, active, recovery, unreadable, saved-unverified, and offline state
     ...['unknown', 'creating', 'review', 'pending'].map(status => ({
       name: `card order ${status}`,
       setup(harness) {
-        harness.ui.state.order = rejectedOrder({ status, terminal: false });
+        harness.ui.state.order = terminalCardOrder({ status, terminal: false });
         harness.ui.state.token = 'existing-token';
       },
     })),
@@ -641,9 +641,9 @@ test('verified payment state takes precedence over a restored guide', () => {
   assert.match(harness.ui.guideBlockReason(), /Recover the earlier checkout/i);
 });
 
-test('rejected-card guide requires no-charge, wallet, and fresh-quote checks before step 2', () => {
+test('terminal-card guide requires no-charge, wallet, and fresh-quote checks before step 2', () => {
   const harness = cardFallbackVm();
-  harness.ui.state.order = rejectedOrder();
+  harness.ui.state.order = terminalCardOrder();
   harness.ui.state.token = 'original-card-token';
   harness.ui.openGuide();
   Object.assign(harness.ui.state.guide, { asset: 'xrp-mainnet' });
@@ -668,10 +668,10 @@ test('rejected-card guide requires no-charge, wallet, and fresh-quote checks bef
   assert.equal(harness.uuidCalls, 0);
 });
 
-test('rejected-card finish cannot hand off or allocate a UUID after a failed or changed status check', async () => {
+test('terminal-card finish cannot hand off or allocate a UUID after a failed or changed status check', async () => {
   for (const result of ['failed-check', 'changed-to-unknown']) {
     const harness = cardFallbackVm();
-    harness.ui.state.order = rejectedOrder();
+    harness.ui.state.order = terminalCardOrder();
     harness.ui.state.token = 'original-card-token';
     harness.ui.state.idempotencyKey = 'old-card-idempotency-key';
     harness.ui.state.guide = formGuide({
@@ -680,7 +680,7 @@ test('rejected-card finish cannot hand off or allocate a UUID after a failed or 
       reference: 'Authoritative invoice',
       asset: 'xrp-mainnet',
       step: 3,
-      source: { kind: 'rejected', orderId: 'card-order-authoritative' },
+      source: { kind: 'terminal_card', orderId: 'card-order-authoritative' },
       noCharge: true,
       walletReady: true,
       networkConfirmed: true,
@@ -693,7 +693,7 @@ test('rejected-card finish cannot hand off or allocate a UUID after a failed or 
       harness.ui.setCheckStatus(async () => false);
     } else {
       harness.ui.setCheckStatus(async () => {
-        harness.ui.state.order = rejectedOrder({ status: 'unknown', terminal: false });
+        harness.ui.state.order = terminalCardOrder({ status: 'unknown', terminal: false });
         return true;
       });
     }
@@ -710,7 +710,7 @@ test('rejected-card finish cannot hand off or allocate a UUID after a failed or 
   }
 
   const success = cardFallbackVm();
-  success.ui.state.order = rejectedOrder();
+  success.ui.state.order = terminalCardOrder();
   success.ui.state.token = 'original-card-token';
   success.ui.openGuide();
   Object.assign(success.ui.state.guide, {
@@ -796,14 +796,14 @@ test('form guide finish copies its exact draft but only a later explicit checkou
 
 test('foreground and bfcache returns reset confirmations and quotes, while cross-tab payment changes block the guide', () => {
   const harness = cardFallbackVm();
-  harness.ui.state.order = rejectedOrder();
+  harness.ui.state.order = terminalCardOrder();
   harness.ui.state.guide = formGuide({
     amount: '479.35',
     currency: 'eur',
     reference: 'Authoritative invoice',
     asset: 'btc-mainnet',
     step: 3,
-    source: { kind: 'rejected', orderId: 'card-order-authoritative' },
+    source: { kind: 'terminal_card', orderId: 'card-order-authoritative' },
     noCharge: true,
     walletReady: true,
     networkConfirmed: true,
@@ -816,7 +816,7 @@ test('foreground and bfcache returns reset confirmations and quotes, while cross
   harness.document.dispatch('visibilitychange');
   harness.document.hidden = false;
   harness.document.dispatch('visibilitychange');
-  assert.equal(harness.ui.state.guide.noCharge, false, 'rejected-card return requires a fresh no-charge check');
+  assert.equal(harness.ui.state.guide.noCharge, false, 'terminal-card return requires a fresh no-charge check');
   assert.equal(harness.ui.state.guide.walletReady, true, 'return step keeps the selected wallet/network context');
   assert.equal(harness.ui.state.guide.networkConfirmed, true);
   assert.equal(harness.ui.state.guide.fundsReady, false);

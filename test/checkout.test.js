@@ -149,8 +149,8 @@ test('merchant assets accept the current NOWPayments selectedCurrencies response
 });
 
 test('raw and Vercel-parsed checkout calls create a real-contract order with memo zero', async () => {
-  const env = await setup();
   for (const raw of [true, false]) {
+    const env = await setup();
     const response = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: checkoutBody({ asset: 'xrp' }), raw });
     assert.equal(response.status, 201);
     assert.equal(response.body.complete, false);
@@ -168,6 +168,16 @@ test('same idempotency key survives concurrent requests and changed request fing
   assert.equal(new Set(responses.map(result => result.body.orderId)).size, 1);
   const changed = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: { ...body, amount: '200' } });
   assert.equal(changed.status, 409);
+});
+
+test('a second idempotency key cannot create another unresolved payment for the same principal', async () => {
+  const env = await setup();
+  const first = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: checkoutBody() });
+  const second = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: checkoutBody() });
+  assert.equal(first.status, 201);
+  assert.equal(second.status, 409);
+  assert.equal(second.body.error, 'payment_in_progress');
+  assert.equal(env.provider.createCalls, 1);
 });
 
 test('ambiguous create timeout is not retried as a new provider payment', async () => {
@@ -197,6 +207,28 @@ test('every provider create failure remains ambiguous and blocks replay', async 
     assert.equal(retry.body.orderId, first.body.orderId, status);
     assert.equal(attempts, 1, status);
   }
+});
+
+test('fallback requires same-principal terminal card lineage and exact money', async () => {
+  const env = await setup();
+  const card = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: checkoutBody({ method: 'card' }) });
+  const cardOrder = await env.store.getOrder(card.body.orderId);
+  await env.store.update(cardOrder.id, current => ({ ...current, status: 'failed', complete: false }));
+  const valid = await call(env.handlers.checkout, {
+    method: 'POST', headers: env.headers,
+    body: checkoutBody({ method: 'crypto', sourceOrderId: cardOrder.id })
+  });
+  assert.equal(valid.status, 201);
+  const saved = await env.store.getOrder(valid.body.orderId);
+  assert.equal(saved.sourceOrderId, cardOrder.id);
+
+  const other = await setup({ store: env.store, provider: env.provider });
+  const denied = await call(other.handlers.checkout, {
+    method: 'POST', headers: other.headers,
+    body: checkoutBody({ method: 'crypto', sourceOrderId: cardOrder.id })
+  });
+  assert.equal(denied.status, 409);
+  assert.equal(denied.body.error, 'invalid_source_order');
 });
 
 test('NOWPayments new status stays sendable and pending during creation and refresh', async () => {
