@@ -35,6 +35,7 @@
         <span class="environment-label" id="environmentLabel" hidden>Test environment</span>
       </div>
       <nav class="header-actions" aria-label="Checkout options">
+        <a class="text-button" href="/create-link.html">Create payment link</a>
         <button class="text-button help-button" id="helpButton" type="button" aria-haspopup="dialog" aria-controls="helpDialog">
           <span class="icon icon-question" aria-hidden="true"></span>
           <span>Payment help</span>
@@ -69,7 +70,10 @@
             <p class="notice-title" id="resumeTitle">Your previous payment</p>
             <p id="resumeDescription">Check its status before starting another.</p>
           </div>
-          <button class="text-button" id="resumeButton" type="button">Return to payment<span class="icon icon-arrow-right" aria-hidden="true"></span></button>
+          <div class="resume-actions">
+            <button class="text-button" id="resumeButton" type="button">Return to payment<span class="icon icon-arrow-right" aria-hidden="true"></span></button>
+            <button class="text-button" id="dismissNoticeButton" type="button" hidden>Dismiss</button>
+          </div>
         </div>
 
         <p class="sandbox-note" data-sandbox hidden>Test environment. Do not send real funds.</p>
@@ -97,10 +101,10 @@
               <p class="sr-only" id="amountHint">Enter an amount without thousands separators.</p>
               <p class="field-error" id="amountError" aria-live="polite" hidden></p>
               <div class="quick-amounts" id="quickAmounts" role="group" aria-label="Quick amounts">
-                <button type="button" data-amount="25" aria-pressed="false">25</button>
-                <button type="button" data-amount="50" aria-pressed="false">50</button>
-                <button type="button" data-amount="100" aria-pressed="true">100</button>
                 <button type="button" data-amount="250" aria-pressed="false">250</button>
+                <button type="button" data-amount="500" aria-pressed="false">500</button>
+                <button type="button" data-amount="1000" aria-pressed="true">1,000</button>
+                <button type="button" data-amount="2500" aria-pressed="false">2,500</button>
               </div>
             </div>
 
@@ -245,6 +249,12 @@
       <button class="button button-secondary card-guide-entry" id="rejectedCardGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog">Use another way to pay</button>
     </section>
 
+    <section class="card-recovery" id="statusGuideSection" aria-label="Pay with crypto instead" hidden>
+      <p class="notice-title">Still need to pay?</p>
+      <p>You can settle this with crypto instead: buy crypto with your card into your own wallet, then pay Erraza in crypto from this page. The buying guide walks you through it step by step.</p>
+      <button class="button button-secondary card-guide-entry" id="statusGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog">Need crypto? Buy with a card</button>
+    </section>
+
     <dl class="receipt" id="paymentReceipt" hidden>
       <div><dt>Order reference</dt><dd class="receipt-order"><span id="receiptOrder"></span><button class="copy-button" id="copyOrderButton" type="button" data-copy="order" aria-label="Copy order reference" disabled><span class="icon icon-copy" aria-hidden="true"></span><span class="copy-label">Copy</span></button></dd></div>
       <div><dt>Payment amount</dt><dd id="receiptAmount"></dd></div>
@@ -263,6 +273,7 @@
     </div>
     <p class="storage-note" id="storageNote" hidden>Your browser could not save the return link. Keep this page open and keep your order reference for the merchant.</p>
     <div class="missing-payment-actions" id="missingPaymentActions" hidden><button class="text-button" id="forgetPaymentButton" type="button">Remove saved link</button><p>This only removes the link from this browser. It does not cancel a payment.</p></div>
+    <div class="missing-payment-actions" id="stalePaymentActions" hidden><button class="text-button" id="dismissPaymentButton" type="button">Dismiss this payment</button><p>Dismiss only removes this payment from this browser, so you can start a new one. It does not cancel the payment. If you sent funds, contact the merchant before paying again.</p></div>
     <p class="dialog-footnote">Closing this window does not cancel your payment.</p>
     <button class="text-button dialog-help" id="paymentHelpButton" type="button" aria-haspopup="dialog" aria-controls="helpDialog">Need help with this payment?</button>
   </dialog>
@@ -275,12 +286,12 @@
     <div class="faq-list">
       <details><summary>Will I pay any fees?</summary><p>Review the final total before confirming your payment. Your bank, card provider or crypto network may charge additional fees.</p></details>
       <details><summary>How do I know my payment is complete?</summary><p>This page shows “Payment received” once your payment is confirmed complete. Until then, use “Check status” to see the latest update.</p></details>
-      <details><summary>My payment is pending or failed. What should I do?</summary><p>If you sent funds or see a card charge, don’t pay again. Check the status, then contact support with the order reference if you need help.</p></details>
+      <details><summary>My payment is pending or failed. What should I do?</summary><p>If you sent funds or see a card charge, don’t pay again — check the status first, then contact support with the order reference if you need help. If your card payment can’t complete and you don’t see any charge, you can settle another way: the “Guide me: buy crypto with a card” option below walks you through paying with crypto instead.</p></details>
       <details><summary>Can I close this page?</summary><p>Yes. Come back in the same browser and choose “Return to payment”. Closing the page does not cancel a payment.</p></details>
     </div>
     <div class="help-guide-entry">
-      <p>Don’t have crypto in a wallet you control?</p>
-      <button class="button button-secondary card-guide-entry" id="helpGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog">Need crypto? Buy with a card</button>
+      <p><strong>Paying with a card, but prefer to pay in crypto?</strong> You don’t need crypto to start — you can buy it here. The buying guide shows you how to get crypto into your own wallet with your card, then return and finish your Erraza payment in crypto.</p>
+      <button class="button button-secondary card-guide-entry" id="helpGuideButton" type="button" aria-haspopup="dialog" aria-controls="cardGuideDialog">Guide me: buy crypto with a card</button>
       <p class="field-note" id="helpGuideBlocked" hidden></p>
     </div>
     <div class="help-contact"><p>Need help? Include your order reference when you contact support.</p><a class="text-link" id="supportEmail" hidden>Contact support<span class="icon icon-arrow-up-right" aria-hidden="true"></span></a></div>

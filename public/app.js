@@ -3,13 +3,16 @@
 
   const STORAGE_KEY = 'pay_page.resume.v1';
   const ATTEMPT_KEY = 'pay_page.pending-attempt.v1';
+  const DISMISS_KEY = 'pay_page.dismissed.v1';
   const GUIDE_KEY = 'pay_page.card-guide.v1';
+  const DISMISS_INTERVAL = 24 * 60 * 60 * 1000;
   const GUIDE_MAX_AGE = 24 * 60 * 60 * 1000;
   const GUIDE_QUOTE_AGE = 2 * 60 * 1000;
   const GUIDE_PROVIDER_URL = 'https://www.moonpay.com/buy';
   const POLL_INTERVAL = 6000;
   const POLL_WINDOW = 20 * 60 * 1000;
-  const FINAL_PROBLEMS = new Set(['failed', 'expired', 'refunded', 'canceled', 'cancelled', 'cancel']);
+  // 'rejected' means the provider never created a checkout, so no funds could have moved.
+  const FINAL_PROBLEMS = new Set(['failed', 'expired', 'refunded', 'canceled', 'cancelled', 'cancel', 'rejected']);
   const AWAITING_PAYMENT = new Set(['waiting', 'waiting_for_deposit', 'pending', 'created', 'new', 'ready']);
   const $ = (id) => document.getElementById(id);
   const el = Object.fromEntries([
@@ -20,7 +23,7 @@
     'assetLoadText', 'retryAssets', 'estimateArea', 'estimateValue', 'estimateFeedback', 'estimateError', 'retryEstimate',
     'availabilityNotice', 'availabilityText', 'retryConfig', 'checkoutErrorBox', 'checkoutError',
     'checkoutTitle', 'continueButton', 'continueLabel', 'continueAmount', 'continueIcon', 'continueNote', 'resumeNotice', 'resumeTitle', 'resumeDescription',
-    'resumeButton', 'assetDialog', 'assetDialogTitle', 'assetSearch', 'assetResults', 'assetResultsCount', 'assetEmpty',
+    'resumeButton', 'dismissNoticeButton', 'assetDialog', 'assetDialogTitle', 'assetSearch', 'assetResults', 'assetResultsCount', 'assetEmpty',
     'paymentDialog', 'paymentStatusIcon', 'paymentStatusGlyph', 'paymentStatusLabel', 'paymentTitle',
     'paymentDescription', 'returnNote', 'providerMessage', 'cryptoPayment', 'paymentAmountLabel', 'paymentAmount',
     'paymentTicker', 'paymentNetwork', 'paymentQrWrap', 'paymentQr', 'paymentAddress', 'paymentMemoWrap', 'paymentMemo',
@@ -28,6 +31,7 @@
     'paymentReceipt', 'receiptOrder', 'copyOrderButton', 'receiptAmount', 'receiptMerchant', 'receiptReferenceRow', 'receiptReference', 'receiptMethod', 'receiptAssetRow', 'receiptAsset',
     'receiptCreatedRow', 'receiptCreated', 'copyFallback', 'copyFallbackValue', 'copyFeedback', 'statusCheckMessage',
     'checkStatusButton', 'checkStatusLabel', 'storageNote', 'missingPaymentActions', 'forgetPaymentButton',
+    'stalePaymentActions', 'dismissPaymentButton', 'statusGuideSection', 'statusGuideButton',
     'paymentHelpButton', 'helpDialog', 'helpTitle', 'privacyDialog', 'privacyTitle', 'supportEmail', 'announcer',
     'cryptoGuideButton', 'fiatGuideButton', 'helpGuideButton', 'helpGuideBlocked', 'cardRecovery', 'rejectedCardGuideButton',
     'cardGuideNotice', 'cardGuideNoticeText', 'resumeGuideButton', 'cancelGuideButton', 'cardGuideDialog', 'cardGuideTitle',
@@ -231,7 +235,7 @@
     const entered = decimalParts(el.amountInput.value);
     el.quickAmounts.querySelectorAll('button[data-amount]').forEach((button) => {
       const value = button.dataset.amount;
-      button.textContent = `${currency?.symbol || ''}${value}`;
+      button.textContent = formatMoney(value, currency?.code || '', false);
       button.setAttribute('aria-label', currency ? `Set amount to ${value} ${currency.label}` : `Set amount to ${value}`);
       button.setAttribute('aria-pressed', String(Boolean(entered) && compareDecimals(el.amountInput.value, value) === 0));
       button.disabled = Boolean(state.config && (
@@ -252,7 +256,7 @@
 
   function guideContext() {
     const order = state.order;
-    if (order?.method === 'card' && ['failed', 'expired', 'refunded'].includes(order.status) && order.terminal && !order.complete) {
+    if (validGuideCardSource(order)) {
       return {
         amount: order.amount,
         currency: order.currency,
@@ -280,7 +284,7 @@
     if (state.pollBusy || state.lookupMissing) return 'Finish checking the original payment before using another payment method.';
     if (state.guidePaymentChanged) return 'A payment changed in another tab. Check its status before continuing.';
     if (!draft) return state.order || state.token || state.saved?.token
-      ? 'Check the existing payment before starting another.'
+      ? 'Review your earlier payment first — choose “Return to payment”. Once it’s complete or over a day old, you can dismiss it and start a new payment.'
       : 'Enter a valid amount before opening the buying guide.';
     if (!decimalParts(draft.amount) || compareDecimals(draft.amount, '0') !== 1
       || !state.config.currencies.some((item) => item.code === draft.currency)) {
@@ -288,12 +292,11 @@
     }
     if (draft.source?.kind === 'terminal_card') {
       const order = state.order;
-      if (!order || order.orderId !== draft.source.orderId || order.method !== 'card'
-        || !['failed', 'expired', 'refunded'].includes(order.status) || !order.terminal || order.complete) {
+      if (!order || order.orderId !== draft.source.orderId || !validGuideCardSource(order)) {
         return 'Check the original card attempt before using another payment method.';
       }
     } else if (draft.source?.kind !== 'form' || state.order || state.token || state.saved?.token) {
-      return 'Check the existing payment before starting another.';
+      return 'Review your earlier payment first — choose “Return to payment”. Once it’s complete or over a day old, you can dismiss it and start a new payment.';
     }
     if (state.assetsPhase !== 'ready' || !state.assets.length) return 'Supported coin and network options must be loaded first.';
     return '';
@@ -384,6 +387,8 @@
     el.helpGuideBlocked.hidden = !blocked;
     el.helpGuideBlocked.textContent = blocked;
     if (el.rejectedCardGuideButton) el.rejectedCardGuideButton.disabled = !guideReady;
+    el.statusGuideButton.disabled = !guideReady;
+    el.statusGuideButton.setAttribute('aria-disabled', String(!guideReady));
 
     const showNotice = Boolean(state.guide || state.guideMessage);
     el.cardGuideNotice.hidden = !showNotice;
@@ -604,8 +609,7 @@
         const checked = await checkStatus(true);
         if (!checked) throw new Error('The original payment status could not be refreshed. Check it before continuing.');
         const order = state.order;
-        if (!order || order.orderId !== draft.source.orderId || order.method !== 'card'
-          || !['failed', 'expired', 'refunded'].includes(order.status) || !order.terminal || order.complete) {
+        if (!order || order.orderId !== draft.source.orderId || !validGuideCardSource(order)) {
           throw new Error('The original payment status changed. Check it before making another payment.');
         }
       }
@@ -619,7 +623,11 @@
       state.reference = draft.reference;
       state.method = 'crypto';
       state.asset = draft.asset;
-      state.rejectedRetryApproved = draft.source.kind === 'terminal_card';
+      // Only a terminal-problem card payment can be linked server-side as a fallback
+      // source. Stale unverified payments hand off as a fresh crypto payment instead.
+      state.rejectedRetryApproved = draft.source.kind === 'terminal_card' && state.order
+        && state.order.orderId === draft.source.orderId
+        && state.order.terminal && ['failed', 'expired', 'refunded'].includes(state.order.status);
       state.idempotencyKey = null;
       state.presetEdited = true;
       el.amountInput.value = draft.amount;
@@ -645,7 +653,76 @@
   }
 
   function settledOrder(order) {
-    return Boolean(order && (order.complete === true || (order.terminal === true && FINAL_PROBLEMS.has(order.status))));
+    if (!order) return false;
+    // A rejected checkout never created a payment, so it settles without a provider verdict.
+    if (order.status === 'rejected') return true;
+    return order.complete === true || (order.terminal === true && FINAL_PROBLEMS.has(order.status));
+  }
+
+  // Card orders the buying guide may treat as a dead end: a terminal problem, a
+  // rejected checkout, or an unverified status old enough that waiting longer is
+  // unreasonable. The guide's "no charge" confirmation stays mandatory for all of them.
+  const STALE_GUIDE_STATUSES = ['review', 'under_review', 'unknown', 'uncertain'];
+
+  function stalePayment(order) {
+    const created = Date.parse(order?.createdAt || '');
+    return Number.isFinite(created) && Date.now() - created >= DISMISS_INTERVAL;
+  }
+
+  function validGuideCardSource(order) {
+    if (order?.method !== 'card' || order.complete) return false;
+    if (order.terminal && ['failed', 'expired', 'refunded'].includes(order.status)) return true;
+    if (order.status === 'rejected') return true;
+    return STALE_GUIDE_STATUSES.includes(order.status) && stalePayment(order);
+  }
+
+  function canDismissOrder(order) {
+    if (!order || order.complete) return false;
+    // A rejected checkout never created a payment, so there is nothing to wait for.
+    return order.status === 'rejected' || settledOrder(order) || stalePayment(order);
+  }
+
+  function canDismissSaved() {
+    if (state.order) return canDismissOrder(state.order);
+    const saved = state.saved;
+    return Boolean(saved?.token && Date.now() - saved.timestamp >= DISMISS_INTERVAL);
+  }
+
+  function dismissedTokens() {
+    try {
+      const list = JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]');
+      return Array.isArray(list) ? list.filter(validToken).slice(-10) : [];
+    } catch { return []; }
+  }
+
+  function rememberDismissedToken(token) {
+    try {
+      const list = dismissedTokens().filter((item) => item !== token);
+      list.push(token);
+      localStorage.setItem(DISMISS_KEY, JSON.stringify(list.slice(-10)));
+    } catch { /* A dismissed token that can't be stored may reappear; payment data is unaffected. */ }
+  }
+
+  function dismissPayment() {
+    const token = state.token || state.saved?.token;
+    if (!token || (state.order ? !canDismissOrder(state.order) : !canDismissSaved())) return;
+    stopPollingRequest();
+    window.clearTimeout(state.expiryTimer);
+    state.token = null;
+    state.order = null;
+    state.saved = null;
+    state.lookupMissing = false;
+    state.pollStopped = true;
+    state.idempotencyKey = null;
+    state.rejectedRetryApproved = false;
+    rememberDismissedToken(token);
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* The in-memory state is already cleared. */ }
+    if (el.paymentDialog.open) el.paymentDialog.close();
+    renderResume();
+    renderContinue();
+    const message = 'This payment was dismissed in this browser, so you can start a new one. Dismissing did not cancel it. If you sent funds, contact the merchant before paying again.';
+    showCheckoutError(message);
+    announce(message);
   }
 
   function hasUnresolvedPayment() {
@@ -1277,7 +1354,7 @@
       finished: ['Completion not verified', 'Checking the final result', 'Completion hasn’t been verified for this payment. Keep your order reference and check again or contact the merchant.'],
       partially_paid: ['Partial payment', 'Partial payment received', 'Less than the required amount was received. Don’t send the full amount again. Contact the merchant with your order reference before sending more.'],
       expired: ['Expired', 'The payment window has ended', 'Don’t send funds to these payment details. If you already sent a payment, contact the merchant with your order reference.'],
-      rejected: ['Checkout unavailable', 'The checkout was not created', 'The provider rejected this checkout request. Review the payment details or contact the merchant.'],
+      rejected: ['Checkout unavailable', 'The checkout was not created', 'The provider rejected this checkout request, so no payment was taken. You can review the details and start a new payment — including the crypto option below.'],
       failed: ['Failed', 'Payment could not be completed', 'The provider reported a failed payment. If you sent funds or see a card charge, contact the merchant with your order reference.'],
       refunded: ['Refunded', 'The provider reports a refund', 'Check the original payment method for the refund. Contact the merchant if you need help tracing it.'],
       canceled: ['Cancelled', 'Payment cancelled', 'The provider marked this payment as cancelled. If you sent funds or see a charge, contact the merchant with your order reference.'],
@@ -1285,10 +1362,10 @@
       cancel: ['Cancelled', 'Payment cancelled', 'The provider marked this payment as cancelled. If you sent funds or see a charge, contact the merchant with your order reference.'],
       creating: ['Preparing payment', 'Preparing your payment', 'The provider is preparing the checkout details. Keep this payment reference; you don’t need to create another payment.'],
       processing: ['Processing', 'Your payment is processing', 'The provider is still processing this payment. Keep your order reference and check here for updates.'],
-      unknown: ['Status unverified', 'We’re checking your payment', 'The provider has not returned a verified outcome. Don’t start a separate payment. Keep your order reference and check again.'],
-      uncertain: ['Status unverified', 'We’re checking your payment', 'The provider has not returned a verified outcome. Don’t start a separate payment. Keep your order reference and check again.'],
-      review: ['Review needed', 'Your payment needs a review', 'The payment has not been confirmed complete. Don’t start another payment. Contact the merchant with your order reference.'],
-      under_review: ['Under review', 'Your payment is under review', 'The payment has not been confirmed complete. Don’t start another payment. Contact the merchant with your order reference.'],
+      unknown: ['Status unverified', 'We’re checking your payment', 'The provider has not returned a verified outcome. Don’t start a separate payment yet. Keep your order reference and check again. If it stays unresolved, you can dismiss this payment to start a new one.'],
+      uncertain: ['Status unverified', 'We’re checking your payment', 'The provider has not returned a verified outcome. Don’t start a separate payment yet. Keep your order reference and check again. If it stays unresolved, you can dismiss this payment to start a new one.'],
+      review: ['Review needed', 'Your payment needs a review', 'The payment has not been confirmed complete, so don’t pay again yet. Contact the merchant with your order reference. If you don’t see any charge, you can settle another way — use the crypto option below, or dismiss this payment to start a new one.'],
+      under_review: ['Under review', 'Your payment is under review', 'The payment has not been confirmed complete, so don’t pay again yet. Contact the merchant with your order reference. If you don’t see any charge, you can settle another way — use the crypto option below, or dismiss this payment to start a new one.'],
     };
     if (AWAITING_PAYMENT.has(order.status)) {
       const ready = order.method === 'card' ? Boolean(safeCheckoutUrl(order.checkoutUrl))
@@ -1404,6 +1481,11 @@
         : 'The provider’s checkout link is being prepared. Check the status again shortly.';
     }
     el.missingPaymentActions.hidden = !state.lookupMissing;
+    el.stalePaymentActions.hidden = state.lookupMissing || !canDismissOrder(order);
+    // The rejected/recovery section covers terminal card problems; this entry covers
+    // the remaining dead ends so a card payer is always offered the crypto path here.
+    el.statusGuideSection.hidden = !(order.method === 'card' && !order.complete && el.cardRecovery.hidden
+      && (order.status === 'rejected' || (STALE_GUIDE_STATUSES.includes(order.status) && stalePayment(order))));
     renderResume();
     renderContinue();
     renderStatusButton();
@@ -1430,6 +1512,8 @@
     el.returnNote.textContent = state.returnMessage;
     el.returnNote.hidden = !state.returnMessage;
     el.missingPaymentActions.hidden = true;
+    el.stalePaymentActions.hidden = true;
+    el.statusGuideSection.hidden = true;
     el.storageNote.hidden = !state.storageFailed;
   }
 
@@ -1441,6 +1525,11 @@
       if (!raw) return null;
       const saved = JSON.parse(raw);
       if (validToken(saved?.token) && Number.isFinite(saved.timestamp) && saved.timestamp > 0) {
+        // A dismissed payment stays dismissed, including in other tabs.
+        if (dismissedTokens().includes(saved.token)) {
+          localStorage.removeItem(STORAGE_KEY);
+          return null;
+        }
         return { token: saved.token, timestamp: saved.timestamp };
       }
       localStorage.removeItem(STORAGE_KEY);
@@ -1463,15 +1552,18 @@
     el.resumeNotice.hidden = !exists;
     if (!exists) return;
     const order = state.order;
+    const dismissible = canDismissSaved();
+    el.dismissNoticeButton.hidden = !dismissible;
     el.resumeTitle.textContent = order ? statusPresentation(order).title : 'Your previous payment';
     el.resumeDescription.textContent = order?.complete ? 'Your receipt is available to review.'
-      : settledOrder(order) ? 'Review the provider’s latest status and order reference.'
-        : 'Check this payment before starting another.';
+      : dismissible ? 'Dismiss it to start a new payment, or review its status first.'
+        : settledOrder(order) ? 'Review the provider’s latest status and order reference.'
+          : 'Check this payment before starting another.';
   }
 
   function adoptOrder(order) {
     if (state.guide && (state.guide.source.kind !== 'terminal_card' || state.guide.source.orderId !== order.orderId
-      || !['failed', 'expired', 'refunded'].includes(order.status))) {
+      || !validGuideCardSource(order))) {
       state.guidePaymentChanged = true;
       state.rejectedRetryApproved = false;
       state.guideMessage = 'The original payment status changed. Check it before making another payment.';
@@ -1858,7 +1950,7 @@
     el.retryEstimate.addEventListener('click', () => queueQuote(0));
     el.resumeButton.addEventListener('click', () => resumePayment(state.token || state.saved?.token));
     el.checkStatusButton.addEventListener('click', () => { void checkStatus(true); });
-    [el.cryptoGuideButton, el.fiatGuideButton, el.helpGuideButton, el.rejectedCardGuideButton, el.resumeGuideButton]
+    [el.cryptoGuideButton, el.fiatGuideButton, el.helpGuideButton, el.rejectedCardGuideButton, el.resumeGuideButton, el.statusGuideButton]
       .forEach((button) => button.addEventListener('click', openGuide));
     el.cancelGuideButton.addEventListener('click', () => leaveGuide());
     el.cardGuideCancel.addEventListener('click', () => leaveGuide());
@@ -1938,6 +2030,8 @@
     el.externalCheckout.addEventListener('click', () => {
       el.statusCheckMessage.textContent = 'Finish in the provider’s tab, then return here to check the payment status.';
     });
+    el.dismissNoticeButton.addEventListener('click', dismissPayment);
+    el.dismissPaymentButton.addEventListener('click', dismissPayment);
     el.forgetPaymentButton.addEventListener('click', () => {
       if (!state.lookupMissing) return;
       stopPollingRequest();

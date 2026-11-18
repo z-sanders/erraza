@@ -43,6 +43,8 @@ function loadRoutes() {
     ['/api/status', require('./api/status.js')],
     ['/api/ipn', require('./api/ipn.js')],
     ['/api/reconcile', require('./api/reconcile.js')],
+    ['/api/cron-reconcile', require('./api/cron-reconcile.js')],
+    ['/api/ops', require('./api/ops.js')],
   ]);
 }
 

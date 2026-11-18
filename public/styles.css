@@ -247,6 +247,7 @@ legend { padding: 0; }
 .resume-notice .notice-title { color: var(--text); font-size: 12px; font-weight: 600; }
 .resume-notice .text-button { width: fit-content; color: var(--accent); justify-content: flex-start; font-size: 11px; }
 .resume-notice .text-button .icon { width: 15px; height: 15px; flex-basis: 15px; }
+.resume-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
 .site-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px 30px; color: var(--text-tertiary); font-size: 10px; line-height: 1.7; }
 .site-footer a { display: inline-flex; align-items: center; gap: 3px; color: var(--text-secondary); text-decoration: none; font-weight: 550; }
 .site-footer a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }

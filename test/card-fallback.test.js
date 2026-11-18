@@ -627,7 +627,7 @@ test('verified payment state takes precedence over a restored guide', () => {
   harness.ui.restoreGuide();
   harness.ui.state.guide.networkConfirmed = true;
   setFreshGuideQuote(harness.ui);
-  assert.match(harness.ui.guideBlockReason(), /existing payment/i);
+  assert.match(harness.ui.guideBlockReason(), /earlier payment/i);
   harness.ui.renderGuide();
   assert.equal(harness.element('cardGuideProvider').getAttribute('href'), null);
   assert.equal(harness.element('cardGuideNext').disabled, true);

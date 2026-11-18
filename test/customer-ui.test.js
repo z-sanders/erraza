@@ -10,15 +10,27 @@ const { randomUUID } = require('node:crypto');
 function customerUi(overrides = {}) {
   const elements = new Map();
   const element = id => {
-    if (!elements.has(id)) elements.set(id, { value: '', hidden: false, disabled: false, textContent: '', setAttribute() {}, querySelectorAll: () => [] });
+    if (!elements.has(id)) elements.set(id, { value: '', hidden: false, disabled: false, textContent: '', dataset: {}, setAttribute() {}, getAttribute: () => null, removeAttribute() {}, className: '', append() {}, replaceChildren() {}, querySelectorAll: () => [] });
     return elements.get(id);
   };
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   assert.match(source, /  boot\(\);\s*\}\)\(\);\s*$/);
-  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp };\n})();');
+  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment };\n})();');
+  const storage = () => {
+    const map = new Map();
+    return {
+      getItem: key => (map.has(key) ? map.get(key) : null),
+      setItem: (key, value) => map.set(key, String(value)),
+      removeItem: key => map.delete(key),
+    };
+  };
+  const localStorageStore = storage();
+  const sessionStorageStore = storage();
   const context = vm.createContext({
     document: { getElementById: element },
-    window: { crypto: { randomUUID }, PaymentLinks: require('../public/payment-links') },
+    window: { crypto: { randomUUID }, PaymentLinks: require('../public/payment-links'), setTimeout: () => 0, clearTimeout() {}, addEventListener() {} },
+    localStorage: localStorageStore,
+    sessionStorage: sessionStorageStore,
   });
   vm.runInContext(instrumented, context);
   const ui = context.ui;
@@ -35,7 +47,7 @@ function customerUi(overrides = {}) {
     },
   });
   element('amountInput').value = '100.00';
-  return { ui, element };
+  return { ui, element, localStorage: localStorageStore };
 }
 
 test('fully configured fiat checkout has no setup notice and enables Continue', () => {
@@ -211,4 +223,125 @@ test('unsupported fiat explains a usable currency choice instead of merchant con
   assert.match(element('availabilityText').textContent, /Card payments aren’t available in CAD/);
   assert.match(element('availabilityText').textContent, /Choose USD, EUR/);
   assert.equal(element('continueButton').disabled, true);
+});
+
+const HOUR = 60 * 60 * 1000;
+
+function cardOrder(overrides = {}) {
+  const ageHours = overrides.ageHours === undefined ? 30 * 24 : overrides.ageHours;
+  const rest = { ...overrides };
+  delete rest.ageHours;
+  return {
+    token: 'tok_test_payment_token_0123456789', orderId: 'err_00000000-0000-4000-8000-000000000000',
+    amount: '100.00', currency: 'usd', method: 'card', asset: null, reference: '', merchant: 'Erraza',
+    status: 'review', terminal: true, complete: false,
+    createdAt: new Date(Date.now() - ageHours * HOUR).toISOString(),
+    payment: null, checkoutUrl: null, message: null,
+    ...rest,
+  };
+}
+
+function readyAssets(ui) {
+  ui.state.assetsPhase = 'ready';
+  ui.state.assets = [{ code: 'btc', ticker: 'BTC', name: 'Bitcoin', network: 'Bitcoin', extraIdRequired: false }];
+}
+
+test('a stale unverified card payment can be dismissed and offers the crypto path', () => {
+  const { ui, element } = customerUi();
+  ui.state.order = cardOrder();
+  ui.state.token = ui.state.order.token;
+  ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
+  readyAssets(ui);
+  ui.renderOrder();
+  assert.equal(element('stalePaymentActions').hidden, false);
+  assert.equal(element('statusGuideSection').hidden, false);
+  assert.equal(element('statusGuideButton').disabled, false);
+  assert.equal(element('dismissNoticeButton').hidden, false);
+  assert.match(element('resumeDescription').textContent, /Dismiss it to start a new payment/);
+  assert.match(ui.statusPresentation(ui.state.order).description, /crypto option below/);
+  assert.match(ui.statusPresentation(ui.state.order).description, /dismiss this payment/);
+});
+
+test('a fresh unverified card payment keeps the protective behavior', () => {
+  const { ui, element } = customerUi();
+  ui.state.order = cardOrder({ ageHours: 2 });
+  ui.state.token = ui.state.order.token;
+  ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
+  readyAssets(ui);
+  ui.renderOrder();
+  assert.equal(element('stalePaymentActions').hidden, true);
+  assert.equal(element('statusGuideSection').hidden, true);
+  assert.equal(element('dismissNoticeButton').hidden, true);
+  assert.equal(ui.canDismissOrder(ui.state.order), false);
+  assert.equal(ui.canDismissSaved(), false);
+  assert.equal(ui.validGuideCardSource(ui.state.order), false);
+});
+
+test('a rejected card checkout settles immediately and points to the crypto guide', () => {
+  const { ui, element } = customerUi();
+  ui.state.order = cardOrder({ status: 'rejected', terminal: false, ageHours: 1 });
+  ui.state.token = ui.state.order.token;
+  ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
+  readyAssets(ui);
+  ui.renderOrder();
+  assert.equal(ui.canDismissOrder(ui.state.order), true);
+  assert.equal(element('stalePaymentActions').hidden, false);
+  assert.equal(element('statusGuideSection').hidden, false);
+  assert.equal(element('statusGuideButton').disabled, false);
+  assert.equal(ui.validGuideCardSource(ui.state.order), true);
+  assert.equal(ui.canCreateCheckout(), true);
+});
+
+test('terminal card problems stay dismissible and usable as the guide source', () => {
+  const { ui } = customerUi();
+  const failed = cardOrder({ status: 'failed', ageHours: 1 });
+  assert.equal(ui.canDismissOrder(failed), true);
+  assert.equal(ui.validGuideCardSource(failed), true);
+  const expired = cardOrder({ status: 'expired', ageHours: 25 * 24 });
+  assert.equal(ui.canDismissOrder(expired), true);
+  assert.equal(ui.validGuideCardSource(expired), true);
+  const complete = cardOrder({ status: 'finished', terminal: true, complete: true, ageHours: 30 * 24 });
+  assert.equal(ui.canDismissOrder(complete), false);
+  assert.equal(ui.validGuideCardSource(complete), false);
+});
+
+test('dismissing removes the payment locally, records the token, and unlocks Continue', () => {
+  const { ui, element } = customerUi();
+  ui.state.order = cardOrder();
+  ui.state.token = ui.state.order.token;
+  ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
+  ui.state.idempotencyKey = '00000000-0000-4000-8000-000000000000';
+  readyAssets(ui);
+  ui.renderOrder();
+  ui.dismissPayment();
+  assert.equal(ui.state.token, null);
+  assert.equal(ui.state.order, null);
+  assert.equal(ui.state.saved, null);
+  assert.equal(ui.state.idempotencyKey, null);
+  // Spread into this realm: arrays from the VM context have a different Array prototype.
+  assert.deepEqual([...ui.dismissedTokens()], ['tok_test_payment_token_0123456789']);
+  assert.match(element('checkoutError').textContent, /did not cancel/);
+  assert.equal(element('resumeNotice').hidden, true);
+  assert.equal(element('continueButton').disabled, false);
+});
+
+test('a dismissed saved payment no longer resumes from storage', () => {
+  const { ui, localStorage } = customerUi();
+  const token = 'tok_dismissed_payment_0123456789';
+  localStorage.setItem('pay_page.resume.v1', JSON.stringify({ token, timestamp: Date.now() }));
+  assert.equal(ui.readSavedPayment()?.token, token);
+  localStorage.setItem('pay_page.dismissed.v1', JSON.stringify([token]));
+  assert.equal(ui.readSavedPayment(), null);
+  assert.equal(localStorage.getItem('pay_page.resume.v1'), null);
+});
+
+test('checkout page exposes the link creator, larger presets, and reworked guidance copy', () => {
+  const markup = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
+  assert.match(markup, /href="\/create-link\.html">Create payment link</);
+  for (const preset of ['250', '500', '1000', '2500']) assert.match(markup, new RegExp(`data-amount="${preset}"`));
+  assert.doesNotMatch(markup, /data-amount="(25|50|100)"/);
+  assert.match(markup, /Guide me: buy crypto with a card/);
+  assert.match(markup, /id="stalePaymentActions"/);
+  assert.match(markup, /id="statusGuideButton"/);
+  assert.match(markup, /Dismiss this payment/);
 });
