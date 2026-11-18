@@ -10,12 +10,12 @@ const { randomUUID } = require('node:crypto');
 function customerUi(overrides = {}) {
   const elements = new Map();
   const element = id => {
-    if (!elements.has(id)) elements.set(id, { value: '', hidden: false, disabled: false, textContent: '', dataset: {}, setAttribute() {}, getAttribute: () => null, removeAttribute() {}, className: '', append() {}, replaceChildren() {}, querySelectorAll: () => [] });
+    if (!elements.has(id)) elements.set(id, { value: '', hidden: false, disabled: false, textContent: '', dataset: {}, className: '', classList: { toggle() {}, add() {}, remove() {} }, setAttribute() {}, getAttribute: () => null, removeAttribute() {}, append() {}, replaceChildren() {}, querySelector: () => null, querySelectorAll: () => [] });
     return elements.get(id);
   };
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   assert.match(source, /  boot\(\);\s*\}\)\(\);\s*$/);
-  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment };\n})();');
+  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset };\n})();');
   const storage = () => {
     const map = new Map();
     return {
@@ -344,4 +344,66 @@ test('checkout page exposes the link creator, larger presets, and reworked guida
   assert.match(markup, /id="stalePaymentActions"/);
   assert.match(markup, /id="statusGuideButton"/);
   assert.match(markup, /Dismiss this payment/);
+});
+
+test('a link preset applies over a settled earlier payment', () => {
+  const { ui, element } = customerUi();
+  ui.state.presetSearch = '?amount=125.50&currency=eur&for=Invoice+9';
+  const order = cardOrder({ status: 'finished', terminal: true, complete: true, ageHours: 30 * 24 });
+  ui.state.saved = { token: order.token, timestamp: Date.now() - 30 * 24 * HOUR };
+  ui.state.token = order.token;
+  ui.state.order = order;
+  ui.applyPresetLink();
+  assert.equal(element('amountInput').value, '125.50');
+  assert.equal(ui.state.currency, 'eur');
+  assert.equal(ui.state.reference, 'Invoice 9');
+  assert.equal(ui.state.presetPending, null);
+  ui.renderResume();
+  assert.equal(element('presetNotice').hidden, true);
+});
+
+test('an unresolved payment keeps a pending preset with an explicit choice', () => {
+  const { ui, element } = customerUi();
+  ui.state.presetSearch = '?amount=125.50&currency=eur';
+  ui.state.saved = { token: 'tok_unresolved_payment_001', timestamp: Date.now() };
+  ui.applyPresetLink();
+  assert.equal(element('amountInput').value, '100.00');
+  assert.deepEqual({ ...ui.state.presetPending }, { amount: '125.50', currency: 'eur', reference: '' });
+  ui.renderResume();
+  assert.equal(element('presetNotice').hidden, false);
+  assert.match(element('presetNoticeTitle').textContent, /This payment link is for €125\.50 EUR/);
+  assert.match(element('presetNoticeText').textContent, /isn’t finished yet/);
+  assert.equal(element('applyPresetButton').disabled, true, 'fresh unresolved payments cannot be overridden');
+});
+
+test('a stale earlier payment lets the payer apply the link amount explicitly', () => {
+  const { ui, element, localStorage } = customerUi();
+  ui.state.presetSearch = '?amount=125.50&currency=eur';
+  ui.state.saved = { token: 'tok_stale_payment_pending_1', timestamp: Date.now() - 25 * HOUR };
+  ui.applyPresetLink();
+  ui.renderResume();
+  assert.equal(element('applyPresetButton').disabled, false);
+  assert.match(element('presetNoticeText').textContent, /does not cancel the payment/);
+  ui.applyPresetFromLink();
+  assert.equal(element('amountInput').value, '125.50');
+  assert.equal(ui.state.currency, 'eur');
+  assert.equal(ui.state.presetPending, null);
+  assert.equal(element('presetNotice').hidden, true);
+  assert.deepEqual([...ui.dismissedTokens()], ['tok_stale_payment_pending_1']);
+  assert.equal(element('continueButton').disabled, false);
+  assert.match(element('checkoutError').textContent, /did not cancel/);
+});
+
+test('settling the earlier payment auto-applies the pending preset', () => {
+  const { ui, element } = customerUi();
+  ui.state.presetSearch = '?amount=125.50&currency=eur';
+  ui.state.saved = { token: 'tok_unresolved_payment_001', timestamp: Date.now() };
+  ui.applyPresetLink();
+  assert.equal(ui.state.presetPending?.amount, '125.50');
+  // The status check always returns an order carrying the checked token.
+  ui.state.token = 'tok_unresolved_payment_001';
+  ui.state.order = cardOrder({ status: 'finished', terminal: true, complete: true, ageHours: 1, token: 'tok_unresolved_payment_001' });
+  ui.maybeApplyPendingPreset();
+  assert.equal(element('amountInput').value, '125.50');
+  assert.equal(ui.state.presetPending, null);
 });

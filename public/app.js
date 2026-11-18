@@ -23,7 +23,7 @@
     'assetLoadText', 'retryAssets', 'estimateArea', 'estimateValue', 'estimateFeedback', 'estimateError', 'retryEstimate',
     'availabilityNotice', 'availabilityText', 'retryConfig', 'checkoutErrorBox', 'checkoutError',
     'checkoutTitle', 'continueButton', 'continueLabel', 'continueAmount', 'continueIcon', 'continueNote', 'resumeNotice', 'resumeTitle', 'resumeDescription',
-    'resumeButton', 'dismissNoticeButton', 'assetDialog', 'assetDialogTitle', 'assetSearch', 'assetResults', 'assetResultsCount', 'assetEmpty',
+    'resumeButton', 'dismissNoticeButton', 'presetNotice', 'presetNoticeTitle', 'presetNoticeText', 'applyPresetButton', 'assetDialog', 'assetDialogTitle', 'assetSearch', 'assetResults', 'assetResultsCount', 'assetEmpty',
     'paymentDialog', 'paymentStatusIcon', 'paymentStatusGlyph', 'paymentStatusLabel', 'paymentTitle',
     'paymentDescription', 'returnNote', 'providerMessage', 'cryptoPayment', 'paymentAmountLabel', 'paymentAmount',
     'paymentTicker', 'paymentNetwork', 'paymentQrWrap', 'paymentQr', 'paymentAddress', 'paymentMemoWrap', 'paymentMemo',
@@ -89,6 +89,7 @@
     presetHandled: false,
     presetEdited: false,
     presetReturning: false,
+    presetPending: null,
     guide: null,
     guideQuote: null,
     guideMessage: '',
@@ -722,7 +723,9 @@
     renderContinue();
     const message = 'This payment was dismissed in this browser, so you can start a new one. Dismissing did not cancel it. If you sent funds, contact the merchant before paying again.';
     showCheckoutError(message);
-    announce(message);
+    // A pending link preset takes over as soon as the earlier reference is gone.
+    const applied = maybeApplyPendingPreset();
+    announce(applied ? `The payment link amount ${formatMoney(applied.amount, applied.currency)} was applied.` : message);
   }
 
   function hasUnresolvedPayment() {
@@ -1143,23 +1146,70 @@
     }, delay);
   }
 
+  function applyPreset(preset) {
+    state.currency = preset.currency;
+    state.reference = preset.reference || '';
+    el.amountInput.value = preset.amount;
+    state.amountTouched = false;
+    state.idempotencyKey = null;
+    // Applying outside the boot path must sync the visible controls too.
+    if (el.currencySelect.querySelector(`option[value="${preset.currency}"]`)) el.currencySelect.value = preset.currency;
+    renderHeading();
+  }
+
+  function announcePendingPreset(preset) {
+    announce(`The payment link amount ${formatMoney(preset.amount, preset.currency)} was applied.`);
+  }
+
+  // A link preset applies over an earlier payment once that payment is settled or
+  // dismissed here — never silently over one that may still be funded.
+  function maybeApplyPendingPreset() {
+    if (!state.presetPending || hasUnresolvedPayment()) return null;
+    const preset = state.presetPending;
+    state.presetPending = null;
+    applyPreset(preset);
+    renderAmount();
+    renderResume();
+    renderContinue();
+    return preset;
+  }
+
+  function applyPresetFromLink() {
+    const preset = state.presetPending;
+    if (!preset || (hasUnresolvedPayment() && !canDismissSaved())) return;
+    if (hasUnresolvedPayment()) {
+      // The dismissal path re-applies the pending preset once the reference is cleared.
+      dismissPayment();
+      return;
+    }
+    state.presetPending = null;
+    applyPreset(preset);
+    renderAmount();
+    renderResume();
+    renderContinue();
+    announcePendingPreset(preset);
+  }
+
   function applyPresetLink() {
     if (state.presetHandled || !state.config) return;
     state.presetHandled = true;
-    // A shared link is only a convenience; it must never replace an existing payment.
-    if (state.presetEdited || state.presetReturning || state.recoveryRequest || state.unreadableAttempt || state.saved?.token || state.token) return;
+    // A shared link is only a convenience: it waits as a pending offer behind an
+    // unresolved payment instead of replacing it or being silently dropped.
+    if (state.presetEdited || state.presetReturning || state.recoveryRequest || state.unreadableAttempt) return;
     try {
       const preset = window.PaymentLinks.parse(state.presetSearch, state.config);
       if (!preset) return;
-      state.currency = preset.currency;
-      state.reference = preset.reference || '';
-      el.amountInput.value = preset.amount;
-      state.amountTouched = false;
-      state.idempotencyKey = null;
+      if (hasUnresolvedPayment()) {
+        state.presetPending = { ...preset, reference: preset.reference || '' };
+        return;
+      }
+      applyPreset(preset);
     } catch (error) {
       el.amountInput.value = '';
       state.amountTouched = false;
       showCheckoutError(`This payment link could not be applied. ${error.message}`);
+    } finally {
+      renderResume();
     }
   }
 
@@ -1549,6 +1599,23 @@
 
   function renderResume() {
     const exists = Boolean(state.saved?.token || state.token);
+    const pendingPreset = state.presetPending;
+    el.presetNotice.hidden = !pendingPreset;
+    if (pendingPreset) {
+      const forLabel = pendingPreset.reference ? ` · for ${pendingPreset.reference}` : '';
+      el.presetNoticeTitle.textContent = `This payment link is for ${formatMoney(pendingPreset.amount, pendingPreset.currency)}${forLabel}`;
+      const blocked = hasUnresolvedPayment();
+      const dismissible = canDismissSaved();
+      if (blocked && !dismissible) {
+        el.presetNoticeText.textContent = 'Your earlier payment isn’t finished yet. Check its status first — the link amount can be applied once that payment is finished or over a day old.';
+      } else if (blocked) {
+        el.presetNoticeText.textContent = 'Your earlier payment is saved in this browser. Applying the link amount dismisses it here; that does not cancel the payment.';
+      } else {
+        el.presetNoticeText.textContent = 'Apply the linked amount to continue with this link’s payment.';
+      }
+      el.applyPresetButton.disabled = Boolean(blocked && !dismissible);
+      el.applyPresetButton.setAttribute('aria-disabled', String(Boolean(blocked && !dismissible)));
+    }
     el.resumeNotice.hidden = !exists;
     if (!exists) return;
     const order = state.order;
@@ -1585,6 +1652,8 @@
       ? 'Showing the latest status from the payment provider.'
       : 'Status updates automatically while this page is open.';
     if (state.pollStopped) window.clearTimeout(state.pollTimer);
+    const applied = maybeApplyPendingPreset();
+    if (applied) announcePendingPreset(applied);
   }
 
   function stopPollingRequest() {
@@ -1949,6 +2018,7 @@
     el.retryConfig.addEventListener('click', () => { void loadConfig(); });
     el.retryEstimate.addEventListener('click', () => queueQuote(0));
     el.resumeButton.addEventListener('click', () => resumePayment(state.token || state.saved?.token));
+    el.applyPresetButton.addEventListener('click', applyPresetFromLink);
     el.checkStatusButton.addEventListener('click', () => { void checkStatus(true); });
     [el.cryptoGuideButton, el.fiatGuideButton, el.helpGuideButton, el.rejectedCardGuideButton, el.resumeGuideButton, el.statusGuideButton]
       .forEach((button) => button.addEventListener('click', openGuide));
@@ -2046,6 +2116,8 @@
       renderResume();
       renderContinue();
       showCheckoutError('The saved link was removed from this tab. This did not cancel a payment. Contact the merchant if you already sent funds.');
+      const applied = maybeApplyPendingPreset();
+      if (applied) announcePendingPreset(applied);
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
