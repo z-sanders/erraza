@@ -15,7 +15,7 @@ function customerUi(overrides = {}) {
   };
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   assert.match(source, /  boot\(\);\s*\}\)\(\);\s*$/);
-  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset };\n})();');
+  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset, referenceUnresolvable, dropDismissedLocalPayment };\n})();');
   const storage = () => {
     const map = new Map();
     return {
@@ -406,4 +406,71 @@ test('settling the earlier payment auto-applies the pending preset', () => {
   ui.maybeApplyPendingPreset();
   assert.equal(element('amountInput').value, '125.50');
   assert.equal(ui.state.presetPending, null);
+});
+
+test('dismissal is blocked while a checkout is in flight', () => {
+  const { ui } = customerUi();
+  ui.state.order = cardOrder({ status: 'failed', ageHours: 1 });
+  ui.state.token = ui.state.order.token;
+  ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
+  ui.state.checkoutBusy = true;
+  ui.dismissPayment();
+  assert.equal(ui.state.token, ui.state.order.token, 'reference survives the in-flight checkout');
+  assert.deepEqual([...ui.dismissedTokens()], []);
+});
+
+test('an edited form is never overwritten by the auto-applied preset', () => {
+  const { ui, element } = customerUi();
+  ui.state.presetSearch = '?amount=125.50&currency=eur';
+  ui.state.saved = { token: 'tok_unresolved_payment_001', timestamp: Date.now() };
+  ui.applyPresetLink();
+  ui.state.presetEdited = true;
+  ui.state.token = 'tok_unresolved_payment_001';
+  ui.state.order = cardOrder({ status: 'finished', terminal: true, complete: true, ageHours: 1, token: 'tok_unresolved_payment_001' });
+  const applied = ui.maybeApplyPendingPreset();
+  assert.equal(applied, null, 'auto-apply skips an edited form');
+  assert.equal(ui.state.presetPending?.amount, '125.50', 'the offer stays available');
+  ui.renderResume();
+  assert.equal(element('presetNotice').hidden, false);
+  assert.equal(element('applyPresetButton').disabled, false, 'the explicit Apply still works');
+  ui.applyPresetFromLink();
+  assert.equal(element('amountInput').value, '125.50');
+});
+
+test('a dismissal in another tab drops the payment here and applies the pending preset', () => {
+  const { ui, element, localStorage } = customerUi();
+  ui.state.presetSearch = '?amount=125.50&currency=eur';
+  ui.state.saved = { token: 'tok_cross_tab_dismiss_01', timestamp: Date.now() - 25 * HOUR };
+  ui.applyPresetLink();
+  ui.renderResume();
+  localStorage.setItem('pay_page.dismissed.v1', JSON.stringify(['tok_cross_tab_dismiss_01']));
+  const applied = ui.dropDismissedLocalPayment();
+  assert.equal(applied?.amount, '125.50');
+  assert.equal(ui.state.token, null);
+  assert.equal(ui.state.saved, null);
+  assert.equal(ui.state.presetPending, null);
+  assert.equal(element('amountInput').value, '125.50');
+  assert.equal(element('resumeNotice').hidden, true);
+  assert.equal(element('presetNotice').hidden, true);
+  assert.equal(element('continueButton').disabled, false);
+  // Unrelated dismissals in other tabs leave this tab untouched.
+  localStorage.setItem('pay_page.dismissed.v1', JSON.stringify(['tok_cross_tab_dismiss_01', 'tok_other_tab_payment_1']));
+  ui.state.saved = { token: 'tok_this_tab_payment_1', timestamp: Date.now() };
+  assert.equal(ui.dropDismissedLocalPayment(), null);
+  assert.equal(ui.state.saved?.token, 'tok_this_tab_payment_1');
+});
+
+test('an unverifiable reference offers removal in the payment dialog', () => {
+  const { ui, element } = customerUi();
+  ui.state.order = cardOrder({ status: 'review', ageHours: 2 });
+  ui.state.token = ui.state.order.token;
+  ui.state.unverifiableChecks = 2;
+  ui.renderOrder();
+  assert.equal(ui.referenceUnresolvable(), false);
+  assert.equal(element('missingPaymentActions').hidden, true);
+  ui.state.unverifiableChecks = 3;
+  ui.renderOrder();
+  assert.equal(ui.referenceUnresolvable(), true);
+  assert.equal(element('missingPaymentActions').hidden, false);
+  assert.equal(element('stalePaymentActions').hidden, true, 'the 24h dismiss stays exclusive of the removal offer');
 });

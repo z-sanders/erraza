@@ -73,6 +73,7 @@
     order: null,
     storageFailed: false,
     lookupMissing: false,
+    unverifiableChecks: 0,
     pollTimer: null,
     pollController: null,
     pollGeneration: 0,
@@ -704,27 +705,45 @@
     } catch { /* A dismissed token that can't be stored may reappear; payment data is unaffected. */ }
   }
 
-  function dismissPayment() {
-    const token = state.token || state.saved?.token;
-    if (!token || (state.order ? !canDismissOrder(state.order) : !canDismissSaved())) return;
+  // The saved reference is unusable: the order is gone, or the provider keeps
+  // rejecting the reference itself (e.g. after a signing-secret rotation).
+  function referenceUnresolvable() {
+    return state.lookupMissing || state.unverifiableChecks >= 3;
+  }
+
+  function dropDismissedLocalPayment() {
+    // Clears the current payment reference when it is on the dismissed list, and
+    // returns the link preset that auto-applied as a result (or null).
+    const dismissed = dismissedTokens();
+    if (!((state.saved?.token && dismissed.includes(state.saved.token))
+      || (state.token && dismissed.includes(state.token)))) return null;
     stopPollingRequest();
     window.clearTimeout(state.expiryTimer);
     state.token = null;
     state.order = null;
     state.saved = null;
     state.lookupMissing = false;
+    state.unverifiableChecks = 0;
     state.pollStopped = true;
     state.idempotencyKey = null;
     state.rejectedRetryApproved = false;
-    rememberDismissedToken(token);
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* The in-memory state is already cleared. */ }
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* The dismissing tab already cleared it. */ }
     if (el.paymentDialog.open) el.paymentDialog.close();
     renderResume();
     renderContinue();
+    return maybeApplyPendingPreset();
+  }
+
+  function dismissPayment() {
+    const token = state.token || state.saved?.token;
+    // An in-flight checkout still adopts its response afterwards; dismissing now
+    // would be silently undone, so wait for the checkout to settle first.
+    if (!token || state.checkoutBusy
+      || (state.order ? !canDismissOrder(state.order) : !canDismissSaved())) return;
+    rememberDismissedToken(token);
+    const applied = dropDismissedLocalPayment();
     const message = 'This payment was dismissed in this browser, so you can start a new one. Dismissing did not cancel it. If you sent funds, contact the merchant before paying again.';
     showCheckoutError(message);
-    // A pending link preset takes over as soon as the earlier reference is gone.
-    const applied = maybeApplyPendingPreset();
     announce(applied ? `The payment link amount ${formatMoney(applied.amount, applied.currency)} was applied.` : message);
   }
 
@@ -1162,9 +1181,10 @@
   }
 
   // A link preset applies over an earlier payment once that payment is settled or
-  // dismissed here — never silently over one that may still be funded.
+  // dismissed here — never silently over one that may still be funded. A payer who
+  // edited the form keeps their edits; the notice's explicit Apply still works.
   function maybeApplyPendingPreset() {
-    if (!state.presetPending || hasUnresolvedPayment()) return null;
+    if (!state.presetPending || hasUnresolvedPayment() || state.presetEdited) return null;
     const preset = state.presetPending;
     state.presetPending = null;
     applyPreset(preset);
@@ -1530,8 +1550,9 @@
         ? 'Keep your order reference and check the latest status before making any other payment.'
         : 'The provider’s checkout link is being prepared. Check the status again shortly.';
     }
-    el.missingPaymentActions.hidden = !state.lookupMissing;
-    el.stalePaymentActions.hidden = state.lookupMissing || !canDismissOrder(order);
+    el.missingPaymentActions.hidden = !referenceUnresolvable();
+    el.stalePaymentActions.hidden = referenceUnresolvable() || !canDismissOrder(order);
+    el.dismissPaymentButton.disabled = state.checkoutBusy;
     // The rejected/recovery section covers terminal card problems; this entry covers
     // the remaining dead ends so a card payer is always offered the crypto path here.
     el.statusGuideSection.hidden = !(order.method === 'card' && !order.complete && el.cardRecovery.hidden
@@ -1613,14 +1634,15 @@
       } else {
         el.presetNoticeText.textContent = 'Apply the linked amount to continue with this link’s payment.';
       }
-      el.applyPresetButton.disabled = Boolean(blocked && !dismissible);
-      el.applyPresetButton.setAttribute('aria-disabled', String(Boolean(blocked && !dismissible)));
+    el.applyPresetButton.disabled = Boolean((blocked && !dismissible) || state.checkoutBusy);
+    el.applyPresetButton.setAttribute('aria-disabled', String(el.applyPresetButton.disabled));
     }
     el.resumeNotice.hidden = !exists;
     if (!exists) return;
     const order = state.order;
     const dismissible = canDismissSaved();
     el.dismissNoticeButton.hidden = !dismissible;
+    el.dismissNoticeButton.disabled = state.checkoutBusy;
     el.resumeTitle.textContent = order ? statusPresentation(order).title : 'Your previous payment';
     el.resumeDescription.textContent = order?.complete ? 'Your receipt is available to review.'
       : dismissible ? 'Dismiss it to start a new payment, or review its status first.'
@@ -1715,6 +1737,7 @@
       if (generation !== state.pollGeneration || token !== state.token) return false;
       const order = normalizeOrder(data, token);
       state.pollErrors = 0;
+      state.unverifiableChecks = 0;
       adoptOrder(order);
       if (manual) announce(`Status checked. ${statusPresentation(order).label}.`);
       if (el.paymentDialog.open) startExpiryClock();
@@ -1724,9 +1747,16 @@
       state.pollErrors += 1;
       delay = Math.min(POLL_INTERVAL * (2 ** Math.min(state.pollErrors, 4)), 60000);
       state.lookupMissing = error instanceof ApiError && [404, 410].includes(error.status);
+      // The provider rejecting the reference itself (403) is definitive; a run of
+      // these means the saved link is unusable and removal should be offered.
+      state.unverifiableChecks = error instanceof ApiError && error.status === 403
+        ? state.unverifiableChecks + 1 : 0;
       if (state.lookupMissing) {
         state.pollStopped = true;
         el.statusCheckMessage.textContent = 'This payment reference could not be retrieved. Contact the merchant if you sent funds or see a charge. Removing the saved link does not cancel a payment.';
+      } else if (referenceUnresolvable()) {
+        state.pollStopped = true;
+        el.statusCheckMessage.textContent = 'The payment reference could not be verified. Remove the saved link below and start a new payment, or contact the merchant if you sent funds.';
       } else {
         el.statusCheckMessage.textContent = `The latest status couldn’t be retrieved. Retrying in ${Math.round(delay / 1000)} seconds. Don’t send another payment while the result is unknown.`;
       }
@@ -1735,7 +1765,7 @@
         el.paymentTitle.textContent = state.lookupMissing ? 'Payment reference unavailable' : 'We couldn’t check your payment';
         el.paymentDescription.textContent = 'There is no verified result to show. Keep any order reference you have and contact the merchant if you need help.';
       }
-      el.missingPaymentActions.hidden = !state.lookupMissing;
+      el.missingPaymentActions.hidden = !referenceUnresolvable();
       renderResume();
       return false;
     } finally {
@@ -1764,6 +1794,7 @@
       state.order = null;
       state.token = token;
       state.lookupMissing = false;
+      state.unverifiableChecks = 0;
       state.pollErrors = 0;
       state.pollStopped = false;
       state.pollDeadline = Date.now() + POLL_WINDOW;
@@ -2103,7 +2134,7 @@
     el.dismissNoticeButton.addEventListener('click', dismissPayment);
     el.dismissPaymentButton.addEventListener('click', dismissPayment);
     el.forgetPaymentButton.addEventListener('click', () => {
-      if (!state.lookupMissing) return;
+      if (!referenceUnresolvable()) return;
       stopPollingRequest();
       state.token = null;
       state.order = null;
@@ -2149,6 +2180,19 @@
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     window.addEventListener('storage', (event) => {
+      // Another tab dismissed this payment: mirror the local cleanup here so the
+      // same reference cannot be reopened and paid from this tab.
+      if (event.key === DISMISS_KEY) {
+        const applied = dropDismissedLocalPayment();
+        if (applied) {
+          showCheckoutError('The payment was dismissed in another tab, so this browser no longer tracks it. That did not cancel the payment. If you sent funds, contact the merchant before paying again.');
+          announcePendingPreset(applied);
+        } else {
+          renderResume();
+          renderContinue();
+        }
+        return;
+      }
       if (event.key !== STORAGE_KEY) return;
       const saved = readSavedPayment();
       if (saved?.token && saved.token !== state.token) {
