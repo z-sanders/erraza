@@ -262,20 +262,33 @@ test('a stale unverified card payment can be dismissed and offers the crypto pat
   assert.match(ui.statusPresentation(ui.state.order).description, /dismiss this payment/);
 });
 
-test('a fresh unverified card payment keeps dismissal locked but offers the crypto path', () => {
+test('a fresh card checkout that never opened is dismissible and offers the crypto path', () => {
   const { ui, element } = customerUi();
-  ui.state.order = cardOrder({ ageHours: 2 });
+  ui.state.order = cardOrder({ ageHours: 2, status: 'unknown', terminal: false });
   ui.state.token = ui.state.order.token;
   ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
   readyAssets(ui);
   ui.renderOrder();
-  assert.equal(element('stalePaymentActions').hidden, true);
-  assert.equal(element('dismissNoticeButton').hidden, true);
-  assert.equal(ui.canDismissOrder(ui.state.order), false);
-  assert.equal(ui.canDismissSaved(), false);
+  assert.equal(element('stalePaymentActions').hidden, false, 'nothing could have been charged, so dismissal is immediate');
+  assert.equal(element('dismissNoticeButton').hidden, false);
+  assert.equal(ui.canDismissOrder(ui.state.order), true);
   assert.equal(element('statusGuideSection').hidden, false, 'the crypto guide is offered right on the status dialog');
   assert.equal(element('statusGuideButton').disabled, false);
   assert.equal(ui.validGuideCardSource(ui.state.order), true);
+  // The dialog answers with one short block instead of stacked warnings.
+  const presentation = ui.statusPresentation(ui.state.order);
+  assert.equal(presentation.title, 'Nothing was charged');
+  assert.equal(presentation.hideProviderMessage, true);
+  assert.equal(element('providerMessage').hidden, true);
+  assert.equal(element('cardPayment').hidden, true, 'the on-ramp section is noise without a checkout link');
+  // A card unknown that DID surface a checkout link keeps the cautious copy.
+  const opened = cardOrder({ ageHours: 2, status: 'unknown', terminal: false, checkoutUrl: 'https://pay.provider.example/checkout/fixture' });
+  const openedPresentation = ui.statusPresentation(opened);
+  assert.equal(openedPresentation.hideProviderMessage, undefined);
+  assert.match(openedPresentation.description, /Don’t start a separate payment yet/);
+  // Crypto unknown keeps the cautious copy too — funds could have been sent.
+  const cryptoUnknown = cardOrder({ ageHours: 2, method: 'crypto', status: 'unknown', terminal: false });
+  assert.match(ui.statusPresentation(cryptoUnknown).description, /Don’t start a separate payment yet/);
 });
 
 test('a rejected card checkout settles immediately and points to the crypto guide', () => {

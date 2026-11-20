@@ -681,7 +681,9 @@
 
   function canDismissOrder(order) {
     if (!order || order.complete) return false;
-    // A rejected checkout never created a payment, so there is nothing to wait for.
+    // A card checkout that never surfaced a provider link cannot have been paid,
+    // so it can be dismissed immediately instead of waiting out the stale window.
+    if (order.method === 'card' && order.status === 'unknown' && !order.checkoutUrl) return true;
     return order.status === 'rejected' || settledOrder(order) || stalePayment(order);
   }
 
@@ -1451,6 +1453,15 @@
         tone: 'pending', icon: order.method === 'card' ? 'credit-card' : 'wallet',
       };
     }
+    // A card checkout that never surfaced a provider link cannot have been paid:
+    // one short answer with a way forward instead of stacked warnings.
+    if (order.method === 'card' && ['unknown', 'uncertain'].includes(order.status) && !order.checkoutUrl) {
+      return {
+        label: 'Checkout unconfirmed', title: 'Nothing was charged',
+        description: 'The payment provider did not confirm this checkout, so no payment was taken. Dismiss it below to start a new payment, or pay with crypto instead.',
+        tone: 'problem', icon: 'info', hideProviderMessage: true,
+      };
+    }
     const values = map[order.status] || ['Status unverified', 'Your payment needs a status check', 'Completion has not been verified. Don’t start a separate payment. Keep your order reference and check again or contact the merchant.'];
     const problem = FINAL_PROBLEMS.has(order.status) || order.status === 'partially_paid';
     return { label: values[0], title: values[1], description: values[2], tone: problem ? 'problem' : 'pending', icon: problem ? 'info' : 'arrow-clockwise' };
@@ -1490,8 +1501,8 @@
     el.paymentDescription.textContent = presentation.description;
     el.paymentStatusIcon.dataset.tone = presentation.tone;
     el.paymentStatusGlyph.className = `icon icon-${presentation.icon}`;
-    el.providerMessage.textContent = order.message || '';
-    el.providerMessage.hidden = !order.message;
+    el.providerMessage.textContent = presentation.hideProviderMessage ? '' : order.message || '';
+    el.providerMessage.hidden = Boolean(presentation.hideProviderMessage) || !order.message;
     el.returnNote.textContent = state.returnMessage;
     el.returnNote.hidden = !state.returnMessage;
     el.storageNote.hidden = !state.storageFailed;
@@ -1537,7 +1548,10 @@
       el.paymentQr.removeAttribute('src');
       el.paymentExpiry.hidden = true;
     }
-    el.cardPayment.hidden = order.method !== 'card' || order.complete || order.status === 'rejected';
+    // Without a live checkout link the on-ramp section is noise; the guide and
+    // dismissal sections carry the way forward for dead ends.
+    el.cardPayment.hidden = order.method !== 'card' || order.complete || order.status === 'rejected'
+      || Boolean(presentation.hideProviderMessage);
     el.cardRecovery.hidden = !(order.method === 'card' && ['failed', 'expired', 'refunded'].includes(order.status) && order.terminal && !order.complete);
     const checkoutUrl = safeCheckoutUrl(order.checkoutUrl);
     const showCheckoutLink = order.method === 'card' && canSendPayment(order) && checkoutUrl;
