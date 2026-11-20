@@ -35,6 +35,16 @@ test('sandbox mode must be explicitly true or false before checkout is configure
   }
 });
 
+test('abandoned creation TTL defaults safely and accepts only one minute through one day', () => {
+  assert.equal(getConfig({}).abandonedCreateTtlSeconds, 3600);
+  assert.equal(getConfig({ ABANDONED_CREATE_TTL_SECONDS: '60' }).abandonedCreateTtlSeconds, 60);
+  assert.equal(getConfig({ ABANDONED_CREATE_TTL_SECONDS: '7200' }).abandonedCreateTtlSeconds, 7200);
+  assert.equal(getConfig({ ABANDONED_CREATE_TTL_SECONDS: '86400' }).abandonedCreateTtlSeconds, 86400);
+  for (const value of ['', '0', '59', '86401', '-1', '3600.5', ' 3600 ', 'abc']) {
+    assert.equal(getConfig({ ABANDONED_CREATE_TTL_SECONDS: value }).abandonedCreateTtlSeconds, 3600, value);
+  }
+});
+
 test('generic USDT payout configuration uses the selected ERC-20 provider ticker', () => {
   const settings = getConfig({ NOWPAYMENTS_PAYOUT_CURRENCY: 'USDT' });
   assert.equal(settings.payoutCurrency, 'usdterc20');

@@ -6,9 +6,11 @@ const { readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
 
 const { alertPlan, backoffSeconds, runReconciliation, PARKED_SECONDS } = require('../lib/monitoring');
+const { expireAbandonedCreation } = require('../lib/orders');
+const { orderToken } = require('../lib/security');
 const { createHandlers } = require('../lib/handlers');
 const { createServer } = require('../server');
-const { config, memoryStore, providerDouble } = require('./helpers');
+const { config, memoryStore, providerDouble, call } = require('./helpers');
 
 const NOW = Date.UTC(2026, 10, 18, 12, 0, 0);
 
@@ -207,4 +209,113 @@ test('monitoring migration locks down tables and functions to the service role',
   // Review is never auto-claimed.
   assert.match(migration, /status IN \('unknown','new','waiting','partially_paid','confirming','confirmed','sending','verification_pending'\)/);
   assert.doesNotMatch(migration, /'review'\s*\)/);
+});
+
+test('abandoned creations expire past their TTL; anything reconcilable never expires', () => {
+  const old = new Date(NOW - 2 * 60 * 60 * 1000).toISOString();
+  const fresh = new Date(NOW - 10 * 60 * 1000).toISOString();
+  const abandoned = { ...order({ status: 'unknown', paymentId: null, payment: null }), createdAt: old };
+  const expired = expireAbandonedCreation(abandoned, 3600, NOW);
+  assert.equal(expired.status, 'expired');
+  assert.equal(expired.complete, false);
+  assert.match(expired.message, /No payment was taken/);
+  // Young orders keep waiting.
+  assert.equal(expireAbandonedCreation({ ...abandoned, createdAt: fresh }, 3600, NOW).status, 'unknown');
+  // Any provider identity or surfaced payment details block expiry.
+  assert.equal(expireAbandonedCreation({ ...abandoned, paymentId: '5444421707' }, 3600, NOW).status, 'unknown');
+  assert.equal(expireAbandonedCreation({ ...abandoned, payment: { address: 'x' } }, 3600, NOW).status, 'unknown');
+  assert.equal(expireAbandonedCreation({ ...abandoned, checkoutUrl: 'https://pay.provider.example/fixture' }, 3600, NOW).status, 'unknown');
+  // Provider-facing or settled statuses are never touched.
+  assert.equal(expireAbandonedCreation({ ...abandoned, status: 'waiting' }, 3600, NOW).status, 'waiting');
+  assert.equal(expireAbandonedCreation({ ...abandoned, status: 'finished', complete: true }, 3600, NOW).status, 'finished');
+});
+
+test('reconciler retires abandoned creations, resolves their alerts, and parks them', async () => {
+  const stuck = order({ status: 'unknown', paymentId: null, payment: null, message: 'The provider has not confirmed whether checkout was created.' });
+  stuck.createdAt = new Date(NOW - 2 * 60 * 60 * 1000).toISOString();
+  const orders = [stuck];
+  const store = memoryOrders(orders);
+  const io = baseIo([{ order_id: stuck.id, reconcile_lease_until: 'lease-stuck' }]);
+  const provider = providerDouble();
+  provider.status = async () => { throw new Error('provider must not be called for identity-less claims'); };
+
+  const summary = await runReconciliation({ store, provider, config, io, limit: 5 });
+
+  assert.equal(summary.outcome, 'completed');
+  assert.equal(summary.transitions, 1);
+  assert.equal(orders.find(o => o.id === stuck.id).status, 'expired');
+  assert.ok(io.resolved.some(key => key === `stuck_unknown:${stuck.id}`));
+  assert.ok(!io.raised.some(entry => entry.orderId === stuck.id));
+  const completion = io.completions.find(c => c.orderId === stuck.id);
+  assert.equal(completion.nextDueSeconds, PARKED_SECONDS);
+});
+
+test('concurrent provider identity attachment wins over abandoned expiry', async () => {
+  const stale = order({ status: 'unknown', paymentId: null, payment: null });
+  stale.createdAt = new Date(NOW - 2 * 60 * 60 * 1000).toISOString();
+  const providerBacked = {
+    ...stale,
+    status: 'waiting', paymentId: '5444421707', expectedPayAmount: '250.00',
+    payment: { address: '0x1234567890abcdef1234567890abcdef12345678', amount: '250.00', currency: 'usdterc20', memo: null }
+  };
+  const reads = [structuredClone(stale), structuredClone(providerBacked), structuredClone(providerBacked)];
+  const store = {
+    async getOrder() { return structuredClone(reads.shift() || providerBacked); },
+    async update(_id, transform) {
+      const next = transform(structuredClone(providerBacked));
+      return structuredClone(next || providerBacked);
+    },
+    async lock() { return true; },
+    async unlock() {}
+  };
+  const io = baseIo([{ order_id: stale.id, reconcile_lease_until: 'lease-race' }]);
+  const provider = providerDouble();
+  let statusCalls = 0;
+  provider.status = async () => {
+    statusCalls += 1;
+    return {
+      payment_id: '5444421707', order_id: stale.id, price_amount: '250.00', price_currency: 'usd',
+      pay_currency: 'usdterc20', pay_amount: '250.00', actually_paid: '0',
+      payment_status: 'waiting', parent_payment_id: null, type: 'crypto'
+    };
+  };
+
+  const summary = await runReconciliation({ store, provider, config, io, limit: 5 });
+
+  assert.equal(statusCalls, 1, 'the fresh provider identity is reconciled, not parked');
+  assert.equal(summary.transitions, 0);
+  assert.notEqual(io.completions[0].nextDueSeconds, PARKED_SECONDS, 'a provider-backed order re-checks on schedule, never parks');
+  assert.equal(io.completions[0].nextDueSeconds, backoffSeconds('waiting', Date.now() - Date.parse(stale.createdAt)));
+});
+
+test('status endpoint retires an abandoned creation and answers with a terminal state', async () => {
+  const store = memoryStore();
+  const provider = providerDouble();
+  const abandoned = {
+    id: 'err_22222222-3333-4333-8333-444444444444', version: 0, principal: 'a'.repeat(64),
+    amount: '100.00', currency: 'usd', method: 'crypto', payCurrency: 'btc', asset: { code: 'btc' },
+    reference: '', sourceOrderId: null, merchant: 'Erraza',
+    status: 'unknown', complete: false, message: 'The provider has not confirmed whether checkout was created.',
+    createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), updatedAt: new Date().toISOString(),
+    lastCheckedAt: null, paymentId: null, expectedPayAmount: null, payment: null, checkoutUrl: null,
+  };
+  store.orders.set(abandoned.id, abandoned);
+  const token = orderToken(abandoned.id, config, abandoned.createdAt);
+  const handlers = createHandlers({ config, store, provider });
+
+  const response = await call(handlers.status, { url: `/api/status?token=${encodeURIComponent(token)}` });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, 'expired');
+  assert.equal(response.body.terminal, true);
+  assert.equal(response.body.complete, false);
+  assert.match(response.body.message, /No payment was taken/);
+  assert.equal(store.orders.get(abandoned.id).status, 'expired');
+  // A young unresolved creation is left alone.
+  const young = { ...abandoned, id: 'err_33333333-4444-4333-8333-555555555555', createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() };
+  store.orders.set(young.id, young);
+  const youngToken = orderToken(young.id, config, young.createdAt);
+  const youngResponse = await call(handlers.status, { url: `/api/status?token=${encodeURIComponent(youngToken)}` });
+  assert.equal(youngResponse.body.status, 'unknown');
+  assert.equal(youngResponse.body.terminal, false);
 });

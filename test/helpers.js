@@ -14,6 +14,7 @@ const config = {
   redisUrl: 'https://redis.example', redisToken: 'test-only', minAmount: '1', maxAmount: '100000',
   fiatEnabled: true, fiatRedirectHosts: ['pay.provider.example'], payoutCurrency: 'btc',
   currencies: CURRENCIES, fiatCurrencies: ONRAMP_CURRENCIES, orderTtlSeconds: 7776000, tokenTtlSeconds: 2592000,
+  abandonedCreateTtlSeconds: 3600,
 };
 
 function memoryStore() {
