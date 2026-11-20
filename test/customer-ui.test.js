@@ -262,7 +262,7 @@ test('a stale unverified card payment can be dismissed and offers the crypto pat
   assert.match(ui.statusPresentation(ui.state.order).description, /dismiss this payment/);
 });
 
-test('a fresh unverified card payment keeps the protective behavior', () => {
+test('a fresh unverified card payment keeps dismissal locked but offers the crypto path', () => {
   const { ui, element } = customerUi();
   ui.state.order = cardOrder({ ageHours: 2 });
   ui.state.token = ui.state.order.token;
@@ -270,11 +270,12 @@ test('a fresh unverified card payment keeps the protective behavior', () => {
   readyAssets(ui);
   ui.renderOrder();
   assert.equal(element('stalePaymentActions').hidden, true);
-  assert.equal(element('statusGuideSection').hidden, true);
   assert.equal(element('dismissNoticeButton').hidden, true);
   assert.equal(ui.canDismissOrder(ui.state.order), false);
   assert.equal(ui.canDismissSaved(), false);
-  assert.equal(ui.validGuideCardSource(ui.state.order), false);
+  assert.equal(element('statusGuideSection').hidden, false, 'the crypto guide is offered right on the status dialog');
+  assert.equal(element('statusGuideButton').disabled, false);
+  assert.equal(ui.validGuideCardSource(ui.state.order), true);
 });
 
 test('a rejected card checkout settles immediately and points to the crypto guide', () => {

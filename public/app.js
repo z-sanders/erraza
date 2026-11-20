@@ -662,8 +662,9 @@
   }
 
   // Card orders the buying guide may treat as a dead end: a terminal problem, a
-  // rejected checkout, or an unverified status old enough that waiting longer is
-  // unreasonable. The guide's "no charge" confirmation stays mandatory for all of them.
+  // rejected checkout, or an unverified card checkout that never surfaced a
+  // provider link (so no charge was possible). The guide's "no charge"
+  // confirmation stays mandatory for all of them.
   const STALE_GUIDE_STATUSES = ['review', 'under_review', 'unknown', 'uncertain'];
 
   function stalePayment(order) {
@@ -675,7 +676,7 @@
     if (order?.method !== 'card' || order.complete) return false;
     if (order.terminal && ['failed', 'expired', 'refunded'].includes(order.status)) return true;
     if (order.status === 'rejected') return true;
-    return STALE_GUIDE_STATUSES.includes(order.status) && stalePayment(order);
+    return STALE_GUIDE_STATUSES.includes(order.status);
   }
 
   function canDismissOrder(order) {
@@ -1553,10 +1554,11 @@
     el.missingPaymentActions.hidden = !referenceUnresolvable();
     el.stalePaymentActions.hidden = referenceUnresolvable() || !canDismissOrder(order);
     el.dismissPaymentButton.disabled = state.checkoutBusy;
-    // The rejected/recovery section covers terminal card problems; this entry covers
-    // the remaining dead ends so a card payer is always offered the crypto path here.
+    // The rejected/recovery section covers terminal card problems; this entry
+    // covers every other card dead end so the payer always sees the crypto path
+    // here, without hunting through help or switching methods first.
     el.statusGuideSection.hidden = !(order.method === 'card' && !order.complete && el.cardRecovery.hidden
-      && (order.status === 'rejected' || (STALE_GUIDE_STATUSES.includes(order.status) && stalePayment(order))));
+      && (order.status === 'rejected' || STALE_GUIDE_STATUSES.includes(order.status)));
     renderResume();
     renderContinue();
     renderStatusButton();

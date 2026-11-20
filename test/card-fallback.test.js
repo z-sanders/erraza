@@ -445,9 +445,9 @@ test('guide eligibility uses ready assets and authoritative rejected-order detai
   assert.equal(rejected.fetchCalls.length, 0);
 });
 
-test('unknown, active, recovery, unreadable, saved-unverified, and offline states cannot open a new guide', () => {
+test('unconfirmed creation, recovery, unreadable, saved-unverified, and offline states cannot open a new guide', () => {
   const scenarios = [
-    ...['unknown', 'creating', 'review', 'pending'].map(status => ({
+    ...['creating', 'pending'].map(status => ({
       name: `card order ${status}`,
       setup(harness) {
         harness.ui.state.order = terminalCardOrder({ status, terminal: false });
@@ -469,6 +469,21 @@ test('unknown, active, recovery, unreadable, saved-unverified, and offline state
     assert.equal(harness.element('cardGuideDialog').open, false, scenario.name);
     assert.equal(harness.fetchCalls.length, 0, scenario.name);
     assert.equal(harness.uuidCalls, 0, scenario.name);
+  }
+});
+
+test('an unverified card checkout dead end opens the guide on its own reference immediately', () => {
+  for (const status of ['unknown', 'review', 'under_review']) {
+    const harness = cardFallbackVm();
+    harness.ui.state.order = terminalCardOrder({ status, terminal: false });
+    harness.ui.state.token = 'existing-token';
+    harness.ui.openGuide();
+    assert.deepEqual(plain(harness.ui.state.guide.source), { kind: 'terminal_card', orderId: 'card-order-authoritative' }, status);
+    assert.equal(harness.ui.state.guide.amount, '479.35', status);
+    assert.equal(harness.ui.state.guide.noCharge, false, status);
+    assert.equal(harness.element('cardGuideDialog').open, true, status);
+    assert.equal(harness.fetchCalls.length, 0, status);
+    assert.equal(harness.uuidCalls, 0, status);
   }
 });
 
@@ -668,46 +683,37 @@ test('terminal-card guide requires no-charge, wallet, and fresh-quote checks bef
   assert.equal(harness.uuidCalls, 0);
 });
 
-test('terminal-card finish cannot hand off or allocate a UUID after a failed or changed status check', async () => {
-  for (const result of ['failed-check', 'changed-to-unknown']) {
-    const harness = cardFallbackVm();
-    harness.ui.state.order = terminalCardOrder();
-    harness.ui.state.token = 'original-card-token';
-    harness.ui.state.idempotencyKey = 'old-card-idempotency-key';
-    harness.ui.state.guide = formGuide({
-      amount: '479.35',
-      currency: 'eur',
-      reference: 'Authoritative invoice',
-      asset: 'xrp-mainnet',
-      step: 3,
-      source: { kind: 'terminal_card', orderId: 'card-order-authoritative' },
-      noCharge: true,
-      walletReady: true,
-      networkConfirmed: true,
-      fundsReady: true,
-    });
-    let assetLoads = 0;
-    harness.ui.setLoadAssets(async () => { assetLoads += 1; });
-    harness.ui.setQueueQuote(() => { throw new Error('queueQuote must not run after an unsafe status check'); });
-    if (result === 'failed-check') {
-      harness.ui.setCheckStatus(async () => false);
-    } else {
-      harness.ui.setCheckStatus(async () => {
-        harness.ui.state.order = terminalCardOrder({ status: 'unknown', terminal: false });
-        return true;
-      });
-    }
+test('terminal-card finish cannot hand off or allocate a UUID after a failed status check', async () => {
+  const harness = cardFallbackVm();
+  harness.ui.state.order = terminalCardOrder();
+  harness.ui.state.token = 'original-card-token';
+  harness.ui.state.idempotencyKey = 'old-card-idempotency-key';
+  harness.ui.state.guide = formGuide({
+    amount: '479.35',
+    currency: 'eur',
+    reference: 'Authoritative invoice',
+    asset: 'xrp-mainnet',
+    step: 3,
+    source: { kind: 'terminal_card', orderId: 'card-order-authoritative' },
+    noCharge: true,
+    walletReady: true,
+    networkConfirmed: true,
+    fundsReady: true,
+  });
+  let assetLoads = 0;
+  harness.ui.setLoadAssets(async () => { assetLoads += 1; });
+  harness.ui.setQueueQuote(() => { throw new Error('queueQuote must not run after an unsafe status check'); });
+  harness.ui.setCheckStatus(async () => false);
 
-    await harness.ui.finishGuide();
-    assert.ok(harness.ui.state.guide, result);
-    assert.equal(harness.ui.state.method, 'card', result);
-    assert.equal(harness.ui.state.idempotencyKey, 'old-card-idempotency-key', result);
-    assert.equal(harness.ui.state.rejectedRetryApproved, false, result);
-    assert.equal(assetLoads, 0, result);
-    assert.equal(checkoutRequests(harness).length, 0, result);
-    assert.equal(harness.uuidCalls, 0, result);
-    assert.match(harness.ui.state.guideMessage, /status (?:could not be refreshed|changed)/i, result);
-  }
+  await harness.ui.finishGuide();
+  assert.ok(harness.ui.state.guide);
+  assert.equal(harness.ui.state.method, 'card');
+  assert.equal(harness.ui.state.idempotencyKey, 'old-card-idempotency-key');
+  assert.equal(harness.ui.state.rejectedRetryApproved, false);
+  assert.equal(assetLoads, 0);
+  assert.equal(checkoutRequests(harness).length, 0);
+  assert.equal(harness.uuidCalls, 0);
+  assert.match(harness.ui.state.guideMessage, /status could not be refreshed/i);
 
   const success = cardFallbackVm();
   success.ui.state.order = terminalCardOrder();
@@ -728,6 +734,44 @@ test('terminal-card finish cannot hand off or allocate a UUID after a failed or 
   assert.equal(success.ui.state.rejectedRetryApproved, true);
   assert.equal(checkoutRequests(success).length, 0);
   assert.equal(success.uuidCalls, 0);
+});
+
+test('a card dead end that changed to unverified still hands off, without fallback linkage', async () => {
+  const harness = cardFallbackVm();
+  harness.ui.state.order = terminalCardOrder();
+  harness.ui.state.token = 'original-card-token';
+  harness.ui.state.idempotencyKey = 'old-card-idempotency-key';
+  harness.ui.state.guide = formGuide({
+    amount: '479.35',
+    currency: 'eur',
+    reference: 'Authoritative invoice',
+    asset: 'xrp-mainnet',
+    step: 3,
+    source: { kind: 'terminal_card', orderId: 'card-order-authoritative' },
+    noCharge: true,
+    walletReady: true,
+    networkConfirmed: true,
+    fundsReady: true,
+  });
+  const sequence = [];
+  harness.ui.setCheckStatus(async () => {
+    sequence.push('status');
+    harness.ui.state.order = terminalCardOrder({ status: 'unknown', terminal: false });
+    return true;
+  });
+  harness.ui.setLoadAssets(async () => { sequence.push('assets'); });
+  harness.ui.setQueueQuote(() => { sequence.push('quote'); });
+
+  await harness.ui.finishGuide();
+  assert.deepEqual(sequence, ['status', 'assets', 'quote']);
+  assert.equal(harness.ui.state.guide, null, 'the dead end still resolves into the crypto handoff');
+  assert.equal(harness.ui.state.method, 'crypto');
+  assert.equal(harness.element('amountInput').value, '479.35');
+  assert.equal(harness.ui.state.currency, 'eur');
+  assert.equal(harness.ui.state.rejectedRetryApproved, false, 'an unverified source is never linked as a server fallback');
+  const requests = checkoutRequests(harness);
+  assert.equal(requests.length, 0);
+  assert.equal(harness.uuidCalls, 0);
 });
 
 test('form guide finish copies its exact draft but only a later explicit checkout creates an invoice and UUID', async () => {

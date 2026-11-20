@@ -9,7 +9,7 @@ const { validateAmount, positiveDecimal, sameAmount, atLeast } = require('../lib
 const { signToken, verifyToken } = require('../lib/security');
 const { sortedStringify, verifyIpn, createProvider, parseProviderJson, ProviderError } = require('../lib/nowpayments');
 const { readJson } = require('../lib/http');
-const { safeRedirect, applyProviderState } = require('../lib/orders');
+const { safeRedirect, applyProviderState, paymentUri } = require('../lib/orders');
 const { clientIp } = require('../lib/handlers');
 
 test('custom amounts reject coercion, scientific notation, separators and precision loss', () => {
@@ -331,4 +331,25 @@ test('card checkout is capability and currency gated with no invented iframe URL
   assert.equal(invalidCurrency.status, 400);
   const local = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, ip: '127.0.0.1', body: checkoutBody({ method: 'card' }) });
   assert.equal(local.status, 400);
+});
+
+test('wallet-prefill payment URIs are built only for memo-less BIP-21 chains', () => {
+  const address = 'bc1qtestaddressforfixtureonly000000000';
+  const amount = '0.001';
+  assert.equal(paymentUri({ ticker: 'BTC', code: 'btc', extraIdRequired: false }, address, amount), `bitcoin:${address}?amount=${amount}`);
+  assert.equal(paymentUri({ ticker: 'LTC', code: 'ltc', extraIdRequired: false }, address, amount), `litecoin:${address}?amount=${amount}`);
+  assert.equal(paymentUri({ ticker: 'DOGE', code: 'doge', extraIdRequired: false }, address, amount), `dogecoin:${address}?amount=${amount}`);
+  assert.equal(paymentUri({ ticker: 'DASH', code: 'dash', extraIdRequired: false }, address, amount), `dash:${address}?amount=${amount}`);
+  // Coins outside the allowlist, memo-required coins, and malformed amounts stay address-only.
+  assert.equal(paymentUri({ ticker: 'ETH', code: 'eth', extraIdRequired: false }, address, amount), null);
+  assert.equal(paymentUri({ ticker: 'USDT', code: 'usdterc20', extraIdRequired: false }, address, amount), null);
+  assert.equal(paymentUri({ ticker: 'XRP', code: 'xrp', extraIdRequired: true }, address, amount), null);
+  assert.equal(paymentUri({ ticker: 'BTC', code: 'btc', extraIdRequired: false }, address, '1e-5'), null);
+  assert.equal(paymentUri({ ticker: 'BTC', code: 'btc', extraIdRequired: false }, address, ''), null);
+  assert.equal(paymentUri(null, address, amount), null);
+  // Amounts are embedded verbatim as exact decimal strings, never re-derived.
+  assert.equal(
+    paymentUri({ ticker: 'BTC', code: 'btc', extraIdRequired: false }, address, '0.00123000'),
+    `bitcoin:${address}?amount=0.00123000`
+  );
 });
