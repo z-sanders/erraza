@@ -9,7 +9,7 @@ const { validateAmount, positiveDecimal, sameAmount, atLeast } = require('../lib
 const { signToken, verifyToken } = require('../lib/security');
 const { sortedStringify, verifyIpn, createProvider, parseProviderJson, ProviderError } = require('../lib/nowpayments');
 const { readJson } = require('../lib/http');
-const { safeRedirect, applyProviderState, paymentUri } = require('../lib/orders');
+const { safeRedirect, applyProviderState, paymentUri, view } = require('../lib/orders');
 const { clientIp } = require('../lib/handlers');
 
 test('custom amounts reject coercion, scientific notation, separators and precision loss', () => {
@@ -281,6 +281,20 @@ test('only verified finished status settles; confirmation and sending stay pendi
   assert.equal(settled.complete, true);
   assert.equal(applyProviderState(settled, { ...payment, payment_status: 'waiting' }).status, 'finished');
   assert.equal(applyProviderState({ ...settled }, { ...payment, payment_status: 'refunded' }).complete, false);
+});
+
+test('partial payments expose the received amount so the payer sees the shortfall', async () => {
+  const env = await setup();
+  const created = await call(env.handlers.checkout, { method: 'POST', headers: env.headers, body: checkoutBody() });
+  const order = await env.store.getOrder(created.body.orderId);
+  const payment = await env.provider.status(order.paymentId);
+  const partial = applyProviderState({ ...order }, { ...payment, payment_status: 'partially_paid', actually_paid: '0.0004' });
+  assert.equal(partial.status, 'partially_paid');
+  assert.equal(partial.actuallyPaid, '0.0004');
+  const viewBody = view(partial, env.config);
+  assert.equal(viewBody.actuallyPaid, '0.0004');
+  assert.equal(viewBody.status, 'partially_paid');
+  assert.equal(viewBody.terminal, false);
 });
 
 test('underpaid finished, parent deposits, altered payment ID or currency cannot settle', async () => {

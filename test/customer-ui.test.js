@@ -15,7 +15,7 @@ function customerUi(overrides = {}) {
   };
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   assert.match(source, /  boot\(\);\s*\}\)\(\);\s*$/);
-  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset, referenceUnresolvable, dropDismissedLocalPayment };\n})();');
+  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset, referenceUnresolvable, dropDismissedLocalPayment, partialRemainder, subtractDecimals };\n})();');
   const storage = () => {
     const map = new Map();
     return {
@@ -487,4 +487,40 @@ test('an unverifiable reference offers removal in the payment dialog', () => {
   assert.equal(ui.referenceUnresolvable(), true);
   assert.equal(element('missingPaymentActions').hidden, false);
   assert.equal(element('stalePaymentActions').hidden, true, 'the 24h dismiss stays exclusive of the removal offer');
+});
+
+test('partial payments show the exact shortfall instead of a dead end', () => {
+  const { ui, element } = customerUi();
+  ui.state.order = cardOrder({
+    status: 'partially_paid', terminal: false, method: 'crypto',
+    asset: { code: 'usdt', ticker: 'USDT', name: 'Tether', network: 'Ethereum', extraIdRequired: false },
+    actuallyPaid: '40.00',
+    payment: { address: '0xfixture0000000000000000000000000000000', amount: '40.00', currency: 'usd', memo: null, qrDataUrl: null, expiresAt: null },
+  });
+  readyAssets(ui);
+  ui.renderOrder();
+  // Trailing zeros are normalized away (formatMoney re-pads for display).
+  assert.equal(ui.partialRemainder(ui.state.order), '60');
+  const presentation = ui.statusPresentation(ui.state.order);
+  assert.equal(presentation.title, 'Partial payment received');
+  assert.match(presentation.description, /We received \$40\.00 USD of \$100\.00 USD/);
+  assert.match(presentation.description, /The remaining amount is \$60\.00 USD/);
+  assert.match(presentation.description, /Don’t send the full amount again/);
+  assert.equal(element('receiptReceivedRow').hidden, false);
+  assert.equal(element('receiptReceived').textContent, '$40.00 USD');
+  assert.match(element('networkCaution').textContent, /The remaining amount is \$60\.00 USD/);
+  // Exact decimal math without floating-point drift.
+  assert.equal(ui.subtractDecimals('0.001', '0.0004'), '0.0006');
+  assert.equal(ui.subtractDecimals('100', '40'), '60');
+  // An over-funding or missing received amount is left to the merchant.
+  assert.equal(ui.partialRemainder({ amount: '100.00', actuallyPaid: '150.00' }), null);
+  assert.equal(ui.partialRemainder({ amount: '100.00' }), null);
+  const overfunded = cardOrder({
+    status: 'partially_paid', terminal: false, method: 'crypto', actuallyPaid: '150.00',
+    payment: { address: '0xfixture0000000000000000000000000000000', amount: '150.00', currency: 'usd', memo: null, qrDataUrl: null, expiresAt: null },
+  });
+  ui.state.order = overfunded;
+  ui.renderOrder();
+  assert.equal(element('receiptReceivedRow').hidden, false);
+  assert.match(ui.statusPresentation(overfunded).description, /The exact amount received is shown below/);
 });

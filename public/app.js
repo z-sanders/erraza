@@ -29,6 +29,7 @@
     'paymentTicker', 'paymentNetwork', 'paymentQrWrap', 'paymentQr', 'paymentAddress', 'paymentMemoWrap', 'paymentMemo',
     'networkCaution', 'paymentExpiry', 'paymentExpiryValue', 'cardPayment', 'externalCheckout', 'cardDestinationNote',
     'paymentReceipt', 'receiptOrder', 'copyOrderButton', 'receiptAmount', 'receiptMerchant', 'receiptReferenceRow', 'receiptReference', 'receiptMethod', 'receiptAssetRow', 'receiptAsset',
+    'receiptReceivedRow', 'receiptReceived',
     'receiptCreatedRow', 'receiptCreated', 'copyFallback', 'copyFallbackValue', 'copyFeedback', 'statusCheckMessage',
     'checkStatusButton', 'checkStatusLabel', 'storageNote', 'missingPaymentActions', 'forgetPaymentButton',
     'stalePaymentActions', 'dismissPaymentButton', 'statusGuideSection', 'statusGuideButton',
@@ -180,6 +181,20 @@
     const parts = decimalParts(value);
     if (!parts || parts.fraction.length > decimals) return null;
     return parts.integer + (decimals ? `.${parts.fraction.padEnd(decimals, '0')}` : '');
+  }
+
+  // Exact decimal subtraction for display amounts; returns null when an input
+  // is not a plain decimal. Never used for payment validation.
+  function subtractDecimals(a, b) {
+    const left = decimalParts(a);
+    const right = decimalParts(b);
+    if (!left || !right) return null;
+    const precision = Math.max(left.fraction.length, right.fraction.length);
+    const scaled = (parts) => BigInt(parts.integer + parts.fraction.padEnd(precision, '0'));
+    const diff = scaled(left) - scaled(right);
+    const digits = (diff < 0n ? -diff : diff).toString().padStart(precision + 1, '0');
+    const text = precision ? `${digits.slice(0, -precision)}.${digits.slice(-precision)}` : digits;
+    return diff < 0n ? `-${text}` : text;
   }
 
   function currencyMeta(code = state.currency) {
@@ -659,6 +674,14 @@
     // A rejected checkout never created a payment, so it settles without a provider verdict.
     if (order.status === 'rejected') return true;
     return order.complete === true || (order.terminal === true && FINAL_PROBLEMS.has(order.status));
+  }
+
+  // The shortfall on a partially_paid order, or null when it cannot be computed
+  // honestly (missing or over-funding amounts are left to the merchant).
+  function partialRemainder(order) {
+    const received = order?.actuallyPaid;
+    if (!received || !order.amount || compareDecimals(received, order.amount) !== -1) return null;
+    return subtractDecimals(order.amount, received);
   }
 
   // Card orders the buying guide may treat as a dead end: a terminal problem, a
@@ -1407,6 +1430,8 @@
       status: data.status.toLowerCase(),
       terminal: data.terminal,
       complete: data.complete,
+      actuallyPaid: decimalParts(data.actuallyPaid) && compareDecimals(data.actuallyPaid, '0') !== -1
+        ? data.actuallyPaid : null,
       createdAt: typeof data.createdAt === 'string' ? data.createdAt : null,
       payment,
       checkoutUrl: typeof data.checkoutUrl === 'string' ? data.checkoutUrl : null,
@@ -1425,7 +1450,6 @@
       exchanging: ['Converting funds', 'Conversion in progress', 'The provider is converting the funds. Your payment is not complete yet. Please don’t send it again.'],
       sending: ['Settling payment', 'Your payment is being settled', 'The provider is transferring the payment. We’re still waiting for its final completion status.'],
       finished: ['Completion not verified', 'Checking the final result', 'Completion hasn’t been verified for this payment. Keep your order reference and check again or contact the merchant.'],
-      partially_paid: ['Partial payment', 'Partial payment received', 'Less than the required amount was received. Don’t send the full amount again. Contact the merchant with your order reference before sending more.'],
       expired: ['Expired', 'The payment window has ended', 'Don’t send funds to these payment details. If you already sent a payment, contact the merchant with your order reference.'],
       rejected: ['Checkout unavailable', 'The checkout was not created', 'The provider rejected this checkout request, so no payment was taken. You can review the details and start a new payment — including the crypto option below.'],
       failed: ['Failed', 'Payment could not be completed', 'The provider reported a failed payment. If you sent funds or see a card charge, contact the merchant with your order reference.'],
@@ -1460,6 +1484,21 @@
         label: 'Checkout unconfirmed', title: 'Nothing was charged',
         description: 'The payment provider did not confirm this checkout, so no payment was taken. Dismiss it below to start a new payment, or pay with crypto instead.',
         tone: 'problem', icon: 'info', hideProviderMessage: true,
+      };
+    }
+    // A partial payment answers with the actual shortfall, not a dead end.
+    if (order.status === 'partially_paid') {
+      const remaining = partialRemainder(order);
+      const receivedText = order.actuallyPaid
+        ? `We received ${formatMoney(order.actuallyPaid, order.currency)} of ${formatMoney(order.amount, order.currency)}.`
+        : '';
+      const remainingText = remaining
+        ? `The remaining amount is ${formatMoney(remaining, order.currency)}.`
+        : 'The exact amount received is shown below.';
+      return {
+        label: 'Partial payment', title: 'Partial payment received',
+        description: `${receivedText} Don’t send the full amount again. ${remainingText} Contact the merchant with your order reference before sending more.`,
+        tone: 'problem', icon: 'info',
       };
     }
     const values = map[order.status] || ['Status unverified', 'Your payment needs a status check', 'Completion has not been verified. Don’t start a separate payment. Keep your order reference and check again or contact the merchant.'];
@@ -1516,6 +1555,9 @@
     el.receiptMethod.textContent = order.method === 'card' ? 'Card (fiat on-ramp)' : 'Crypto';
     el.receiptAssetRow.hidden = !order.asset;
     el.receiptAsset.textContent = order.asset ? `${order.asset.ticker} · ${order.asset.network}` : '';
+    const receivedRow = order.status === 'partially_paid' && order.actuallyPaid;
+    el.receiptReceivedRow.hidden = !receivedRow;
+    el.receiptReceived.textContent = receivedRow ? formatMoney(order.actuallyPaid, order.currency) : '';
     const created = order.createdAt ? Date.parse(order.createdAt) : NaN;
     el.receiptCreatedRow.hidden = !Number.isFinite(created);
     el.receiptCreated.textContent = Number.isFinite(created)
@@ -1540,7 +1582,9 @@
       el.networkCaution.textContent = sendable
         ? `Send only ${order.asset.ticker} on ${order.asset.network}. A different coin or network may result in lost funds.`
         : order.status === 'partially_paid'
-          ? 'This is the original requested amount, not the amount remaining. Contact the merchant before sending any more funds.'
+          ? (partialRemainder(order)
+            ? `Received so far: ${formatMoney(order.actuallyPaid, order.currency)}. The remaining amount is ${formatMoney(partialRemainder(order), order.currency)}. Contact the merchant before sending more.`
+            : 'This is the original requested amount, not the amount remaining. Contact the merchant before sending any more funds.')
           : 'These details are for your reference. Don’t send another payment without checking the latest status with the merchant.';
       updateExpiry();
     } else {
