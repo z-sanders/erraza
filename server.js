@@ -45,10 +45,10 @@ function loadRoutes() {
     ['/api/reconcile', require('./api/reconcile.js')],
     ['/api/cron-reconcile', require('./api/cron-reconcile.js')],
     ['/api/ops', require('./api/ops.js')],
-    ['/api/admin/login', require('./api/admin/login.js')],
-    ['/api/admin/logout', require('./api/admin/logout.js')],
-    ['/api/admin/overview', require('./api/admin/overview.js')],
-    ['/api/admin/receipts-toggle', require('./api/admin/receipts-toggle.js')],
+    ['/api/admin/login', require('./api/ops.js')],
+    ['/api/admin/logout', require('./api/ops.js')],
+    ['/api/admin/overview', require('./api/ops.js')],
+    ['/api/admin/receipts-toggle', require('./api/ops.js')],
   ]);
 }
 
@@ -120,7 +120,9 @@ function createServer({ handlers } = {}) {
   const routes = handlers === undefined ? loadRoutes()
     : handlers instanceof Map ? new Map(handlers) : new Map(Object.entries(handlers));
   const allowedRoutes = new Set(['/api/config', '/api/currencies', '/api/estimate', '/api/min-amount', '/api/checkout', '/api/status', '/api/ipn', '/api/reconcile', '/api/cron-reconcile', '/api/ops', '/api/admin/login', '/api/admin/logout', '/api/admin/overview', '/api/admin/receipts-toggle']);
-  const invalidRoute = [...routes].some(([route, handler]) => !allowedRoutes.has(route) || typeof handler !== 'function');
+  // 'ops-dispatch' is an internal multiplexer (one function serves /api/ops and the
+  // admin routes under the Hobby function cap) and is never a served path itself.
+  const invalidRoute = [...routes].some(([route, handler]) => route !== '/api/ops-dispatch' && (!allowedRoutes.has(route) || typeof handler !== 'function'));
   // The CLI path must serve every route; injected maps (tests, tools) may be subsets.
   if (invalidRoute || (handlers === undefined && routes.size !== allowedRoutes.size)) {
     throw new TypeError('Supply exactly the configured API route handlers.');

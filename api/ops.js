@@ -1,3 +1,1 @@
-'use strict';
-
-module.exports = require('../lib/handlers').handler('ops');
+module.exports = require('../lib/handlers').handler('ops-dispatch');
