@@ -6,9 +6,6 @@
   "functions": {
     "api/*.js": {
       "maxDuration": 60
-    },
-    "api/admin/*.js": {
-      "maxDuration": 60
     }
   },
   "headers": [
