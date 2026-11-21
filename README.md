@@ -36,6 +36,10 @@ Copy `.env.example` to `.env` for local development; populate production values 
 | `NOWPAYMENTS_FIAT_ENABLED` | Optional override, defaults to `true` for this already-activated merchant account. Set `false` only to intentionally turn card payments off. This setting is not an account-approval check. |
 | `NOWPAYMENTS_FIAT_REDIRECT_HOSTS` | Optional additional restriction on provider-returned checkout URLs. Leave blank for normal operation, or specify exact comma-separated hosts. Malformed restrictions disable fiat rather than silently dropping restrictions. |
 | `RECONCILIATION_SECRET` | Optional separate random secret of at least 32 characters for the merchant-only manual reconciliation endpoint. Empty disables that endpoint. Never expose it to browsers. |
+| `SUPABASE_ANON_KEY` | Optional public Supabase client credential for the admin dashboard's Supabase Auth sign-in. Falls back to the service-role key server-side when absent. |
+| `ADMIN_EMAILS` | Optional comma-separated administrator emails. Members may sign in at /admin.html with their Supabase Auth password. Empty disables the dashboard. |
+| `EMAIL_RECEIPTS_ENABLED` | Optional env default for payer email receipts; the runtime toggle in /admin.html overrides it. Defaults to false. |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Required together (with `ADMIN_EMAILS`) for emails: settlement notifications to admins and, when the receipts toggle is on, payer receipts. |
 | `PORT` | Local loopback server port, default `3000`. |
 
 Generate separate signing/operator secrets locally, for example:

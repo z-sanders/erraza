@@ -682,10 +682,27 @@
 
   // The shortfall on a partially_paid order, or null when it cannot be computed
   // honestly (missing or over-funding amounts are left to the merchant).
+  // Units differ by rail: crypto shortfalls are in coin units (payCurrency),
+  // card on-ramp shortfalls are fiat.
   function partialRemainder(order) {
     const received = order?.actuallyPaid;
-    if (!received || !order.amount || compareDecimals(received, order.amount) !== -1) return null;
-    return subtractDecimals(order.amount, received);
+    if (!received) return null;
+    if (order.method === 'crypto') {
+      const expected = order.payment?.amount;
+      const currency = order.payment?.currency;
+      if (!expected || !currency || compareDecimals(received, expected) !== -1) return null;
+      return { remaining: subtractDecimals(expected, received), currency };
+    }
+    if (order.method === 'card' && order.currency && compareDecimals(received, order.amount) === -1) {
+      return { remaining: subtractDecimals(order.amount, received), currency: order.currency };
+    }
+    return null;
+  }
+
+  function partialReceivedLabel(order) {
+    if (!order?.actuallyPaid) return null;
+    const currency = order.method === 'crypto' ? order.payment?.currency : order.currency;
+    return currency ? formatMoney(order.actuallyPaid, currency) : null;
   }
 
   // Card orders the buying guide may treat as a dead end: a terminal problem, a
@@ -1542,22 +1559,37 @@
         tone: 'problem', icon: 'info', hideProviderMessage: true,
       };
     }
-    // A partial payment answers with the actual shortfall, not a dead end.
     if (order.status === 'partially_paid') {
-      const remaining = partialRemainder(order);
-      const receivedText = order.actuallyPaid
-        ? `We received ${formatMoney(order.actuallyPaid, order.currency)} of ${formatMoney(order.amount, order.currency)}.`
-        : '';
-      const remainingText = remaining
-        ? `The remaining amount is ${formatMoney(remaining, order.currency)}.`
-        : 'The exact amount received is shown below.';
+      const shortfall = partialRemainder(order);
+      const received = partialReceivedLabel(order);
+      const expectedText = order.method === 'crypto' && order.payment ? formatMoney(order.payment.amount, order.payment.currency) : formatMoney(order.amount, order.currency);
+      const receivedText = received ? `We received ${received} of ${expectedText}.` : '';
+      const windowLive = order.method === 'crypto' && order.payment
+        ? (expiryTime(order) === null || expiryTime(order) > Date.now())
+        : null;
+      if (order.method === 'crypto' && windowLive === true) {
+        const remaining = shortfall ? ` Send the remaining ${formatMoney(shortfall.remaining, shortfall.currency)} to the same payment address below before the window ends — this page checks automatically and completes the payment.` : '';
+        return {
+          label: 'Partial payment', title: 'Partial payment received',
+          description: `${receivedText} Don’t send the full amount again.${remaining}`,
+          tone: 'pending', icon: 'arrow-clockwise',
+        };
+      }
+      if (order.method === 'crypto' && windowLive === false) {
+        return {
+          label: 'Partial payment', title: 'Partial payment received',
+          description: `${receivedText} The payment window has ended. Don’t send the full amount again — contact the merchant with your order reference before sending more.`,
+          tone: 'problem', icon: 'info',
+        };
+      }
+      const remainingText = shortfall ? `The remaining amount is ${formatMoney(shortfall.remaining, shortfall.currency)}.` : 'The exact amount received is shown below.';
       return {
         label: 'Partial payment', title: 'Partial payment received',
         description: `${receivedText} Don’t send the full amount again. ${remainingText} Contact the merchant with your order reference before sending more.`,
         tone: 'problem', icon: 'info',
       };
     }
-    const values = map[order.status] || ['Status unverified', 'Your payment needs a status check', 'Completion has not been verified. Don’t start a separate payment. Keep your order reference and check again or contact the merchant.'];
+      const values = map[order.status] || ['Status unverified', 'Your payment needs a status check', 'Completion has not been verified. Don’t start a separate payment. Keep your order reference and check again or contact the merchant.'];
     const problem = FINAL_PROBLEMS.has(order.status) || order.status === 'partially_paid';
     return { label: values[0], title: values[1], description: values[2], tone: problem ? 'problem' : 'pending', icon: problem ? 'info' : 'arrow-clockwise' };
   }
@@ -1583,8 +1615,12 @@
 
   function canSendPayment(order) {
     const expiry = expiryTime(order);
-    return !order.complete && !order.terminal && AWAITING_PAYMENT.has(order.status)
-      && (expiry === null || expiry > Date.now());
+    const windowLive = expiry === null || expiry > Date.now();
+    // A live partially_paid window accepts the shortfall at the same address.
+    if (order.status === 'partially_paid' && order.method === 'crypto' && !order.complete) {
+      return windowLive && Boolean(partialRemainder(order));
+    }
+    return !order.complete && !order.terminal && AWAITING_PAYMENT.has(order.status) && windowLive;
   }
 
   function renderOrder() {
@@ -1613,7 +1649,7 @@
     el.receiptAsset.textContent = order.asset ? `${order.asset.ticker} · ${order.asset.network}` : '';
     const receivedRow = order.status === 'partially_paid' && order.actuallyPaid;
     el.receiptReceivedRow.hidden = !receivedRow;
-    el.receiptReceived.textContent = receivedRow ? formatMoney(order.actuallyPaid, order.currency) : '';
+    el.receiptReceived.textContent = receivedRow ? partialReceivedLabel(order) : '';
     const created = order.createdAt ? Date.parse(order.createdAt) : NaN;
     el.receiptCreatedRow.hidden = !Number.isFinite(created);
     el.receiptCreated.textContent = Number.isFinite(created)
@@ -1623,25 +1659,30 @@
     el.cryptoPayment.hidden = !hasCryptoDetails || order.complete;
     if (hasCryptoDetails) {
       const sendable = canSendPayment(order);
-      el.paymentAmountLabel.textContent = sendable ? 'Send exactly' : 'Original requested amount';
-      el.paymentAmount.textContent = payment.amount;
-      el.paymentTicker.textContent = order.asset.ticker;
+      const shortfall = order.status === 'partially_paid' ? partialRemainder(order) : null;
+      el.paymentAmountLabel.textContent = sendable ? (shortfall ? 'Send the remaining amount' : 'Send exactly') : 'Original requested amount';
+      el.paymentAmount.textContent = shortfall ? shortfall.remaining : payment.amount;
+      el.paymentTicker.textContent = shortfall ? payment.currency : order.asset.ticker;
       el.paymentNetwork.textContent = order.asset.network;
       if (el.paymentAddress.value !== payment.address) el.paymentAddress.value = payment.address;
       el.paymentMemoWrap.hidden = payment.memo === null;
       if (el.paymentMemo.value !== (payment.memo ?? '')) el.paymentMemo.value = payment.memo ?? '';
-      const showQr = sendable && safeQr(payment.qrDataUrl);
+      // The stored QR encodes the full original amount, which is wrong for a
+      // top-up — address and copy fields carry the shortfall instead.
+      const showQr = sendable && !shortfall && safeQr(payment.qrDataUrl);
       el.paymentQrWrap.hidden = !showQr;
       if (showQr && el.paymentQr.getAttribute('src') !== payment.qrDataUrl) el.paymentQr.src = payment.qrDataUrl;
       if (!showQr) el.paymentQr.removeAttribute('src');
       el.cryptoPayment.querySelectorAll('[data-copy]').forEach((button) => { button.disabled = !sendable; });
-      el.networkCaution.textContent = sendable
+      el.networkCaution.textContent = sendable && !shortfall
         ? `Send only ${order.asset.ticker} on ${order.asset.network}. A different coin or network may result in lost funds.`
-        : order.status === 'partially_paid'
-          ? (partialRemainder(order)
-            ? `Received so far: ${formatMoney(order.actuallyPaid, order.currency)}. The remaining amount is ${formatMoney(partialRemainder(order), order.currency)}. Contact the merchant before sending more.`
-            : 'This is the original requested amount, not the amount remaining. Contact the merchant before sending any more funds.')
-          : 'These details are for your reference. Don’t send another payment without checking the latest status with the merchant.';
+        : sendable && shortfall
+          ? `Send only ${order.asset.ticker} on ${order.asset.network}. A different coin or network may result in lost funds.`
+          : order.status === 'partially_paid'
+            ? (shortfall
+              ? `Received so far: ${partialReceivedLabel(order)}. The remaining amount is ${formatMoney(shortfall.remaining, shortfall.currency)}. The payment window has ended — contact the merchant before sending more.`
+              : 'This is the original requested amount, not the amount remaining. Contact the merchant before sending any more funds.')
+            : 'These details are for your reference. Don’t send another payment without checking the latest status with the merchant.';
       updateExpiry();
     } else {
       el.paymentQrWrap.hidden = true;
@@ -1973,11 +2014,13 @@
     if (button.disabled || !state.order) return;
     const field = button.dataset.copy;
     if (!['order', 'amount', 'address', 'memo'].includes(field)) return;
+    const shortfall = field === 'amount' ? partialRemainder(state.order) : null;
     const value = field === 'order' ? state.order.orderId
-      : field === 'amount' ? state.order.payment?.amount
+      : field === 'amount' ? (shortfall ? shortfall.remaining : state.order.payment?.amount)
         : field === 'address' ? state.order.payment?.address : state.order.payment?.memo;
     if (value == null) return;
-    const label = field === 'order' ? 'Order reference' : field === 'memo' ? 'Memo' : field === 'amount' ? 'Exact amount' : 'Address';
+    const label = field === 'order' ? 'Order reference' : field === 'memo' ? 'Memo'
+      : field === 'amount' ? (partialRemainder(state.order) ? 'Remaining amount' : 'Exact amount') : 'Address';
     el.copyFallback.hidden = true;
     el.copyFeedback.textContent = '';
     try {

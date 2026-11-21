@@ -1,5 +1,3 @@
-'use strict';
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -489,38 +487,83 @@ test('an unverifiable reference offers removal in the payment dialog', () => {
   assert.equal(element('stalePaymentActions').hidden, true, 'the 24h dismiss stays exclusive of the removal offer');
 });
 
-test('partial payments show the exact shortfall instead of a dead end', () => {
+
+test('crypto partial payments self-serve the exact coin shortfall while the window is live', () => {
   const { ui, element } = customerUi();
   ui.state.order = cardOrder({
     status: 'partially_paid', terminal: false, method: 'crypto',
     asset: { code: 'usdt', ticker: 'USDT', name: 'Tether', network: 'Ethereum', extraIdRequired: false },
-    actuallyPaid: '40.00',
-    payment: { address: '0xfixture0000000000000000000000000000000', amount: '40.00', currency: 'usd', memo: null, qrDataUrl: null, expiresAt: null },
+    actuallyPaid: '0.0004',
+    payment: { address: '0xfixture0000000000000000000000000000000', amount: '0.001', currency: 'usdt', memo: null, qrDataUrl: null, expiresAt: null },
   });
   readyAssets(ui);
   ui.renderOrder();
-  // Trailing zeros are normalized away (formatMoney re-pads for display).
-  assert.equal(ui.partialRemainder(ui.state.order), '60');
+  const shortfall = ui.partialRemainder(ui.state.order);
+  // Compare fields: the object comes from the VM realm with a different prototype.
+  assert.equal(shortfall.remaining, '0.0006');
+  assert.equal(shortfall.currency, 'usdt');
   const presentation = ui.statusPresentation(ui.state.order);
   assert.equal(presentation.title, 'Partial payment received');
-  assert.match(presentation.description, /We received \$40\.00 USD of \$100\.00 USD/);
-  assert.match(presentation.description, /The remaining amount is \$60\.00 USD/);
+  assert.match(presentation.description, /We received 0\.0004 USDT of 0\.001 USDT/);
+  assert.match(presentation.description, /Send the remaining 0\.0006 USDT to the same payment address below/);
   assert.match(presentation.description, /Don’t send the full amount again/);
+  assert.equal(presentation.tone, 'pending', 'a live window makes the top-up self-service');
   assert.equal(element('receiptReceivedRow').hidden, false);
-  assert.equal(element('receiptReceived').textContent, '$40.00 USD');
-  assert.match(element('networkCaution').textContent, /The remaining amount is \$60\.00 USD/);
+  assert.equal(element('receiptReceived').textContent, '0.0004 USDT');
+  assert.equal(element('paymentAmountLabel').textContent, 'Send the remaining amount');
+  assert.equal(element('paymentAmount').textContent, '0.0006');
+  assert.equal(element('paymentTicker').textContent, 'usdt');
+  assert.equal(element('paymentQrWrap').hidden, true, 'the stored QR encodes the full original amount');
+  assert.equal(element('paymentAddress').value, '0xfixture0000000000000000000000000000000');
+  assert.equal(element('paymentQrWrap').hidden, true);
+  assert.match(element('networkCaution').textContent, /Send only USDT on Ethereum/);
   // Exact decimal math without floating-point drift.
   assert.equal(ui.subtractDecimals('0.001', '0.0004'), '0.0006');
   assert.equal(ui.subtractDecimals('100', '40'), '60');
-  // An over-funding or missing received amount is left to the merchant.
-  assert.equal(ui.partialRemainder({ amount: '100.00', actuallyPaid: '150.00' }), null);
-  assert.equal(ui.partialRemainder({ amount: '100.00' }), null);
+  // Over-funding or a missing received amount is left to the merchant.
+  assert.equal(ui.partialRemainder({ method: 'crypto', amount: '100.00', actuallyPaid: '150.00', payment: { amount: '0.001', currency: 'btc' } }), null);
+  assert.equal(ui.partialRemainder({ method: 'crypto', amount: '100.00', payment: { amount: '0.001', currency: 'btc' } }), null);
+  assert.equal(ui.partialRemainder({ method: 'card', amount: '100.00', actuallyPaid: '150.00' }), null);
+  assert.equal(ui.partialRemainder({ method: 'card', amount: '100.00' }), null);
   const overfunded = cardOrder({
-    status: 'partially_paid', terminal: false, method: 'crypto', actuallyPaid: '150.00',
-    payment: { address: '0xfixture0000000000000000000000000000000', amount: '150.00', currency: 'usd', memo: null, qrDataUrl: null, expiresAt: null },
+    status: 'partially_paid', terminal: false, method: 'crypto', actuallyPaid: '0.002',
+    payment: { address: '0xfixture0000000000000000000000000000000', amount: '0.001', currency: 'usdt', memo: null, qrDataUrl: null, expiresAt: null },
   });
   ui.state.order = overfunded;
   ui.renderOrder();
   assert.equal(element('receiptReceivedRow').hidden, false);
-  assert.match(ui.statusPresentation(overfunded).description, /The exact amount received is shown below/);
+  assert.equal(element('receiptReceived').textContent, '0.002 USDT');
+  // Over-funded crypto is honestly pending: the provider will settle the excess payment.
+  assert.match(ui.statusPresentation(overfunded).description, /We received 0.002 USDT of 0.001 USDT/);
+  assert.match(ui.statusPresentation(overfunded).description, /Don’t send the full amount again/);
 });
+
+test('crypto partial payments with an ended window defer to the merchant; card shortfalls stay fiat', () => {
+  const { ui, element } = customerUi();
+  const ended = cardOrder({
+    status: 'partially_paid', terminal: false, method: 'crypto',
+    asset: { code: 'usdt', ticker: 'USDT', name: 'Tether', network: 'Ethereum', extraIdRequired: false },
+    actuallyPaid: '0.0004',
+    payment: { address: '0xfixture0000000000000000000000000000000', amount: '0.001', currency: 'usdt', memo: null, qrDataUrl: null, expiresAt: new Date(Date.now() - 60000).toISOString() },
+  });
+  ui.state.order = ended;
+  ui.renderOrder();
+  const presentation = ui.statusPresentation(ended);
+  assert.match(presentation.description, /The payment window has ended/);
+  assert.match(presentation.description, /contact the merchant with your order reference/);
+  assert.equal(presentation.tone, 'problem');
+  assert.equal(element('paymentAmountLabel').textContent, 'Original requested amount');
+
+  const { ui: cardUi, element: cardElement } = customerUi();
+  cardUi.state.order = cardOrder({
+    status: 'partially_paid', terminal: false, method: 'card', actuallyPaid: '40.00',
+  });
+  cardUi.renderOrder();
+  const cardPresentation = cardUi.statusPresentation(cardUi.state.order);
+  assert.match(cardPresentation.description, /We received \$40\.00 USD of \$100\.00 USD/);
+  assert.match(cardPresentation.description, /The remaining amount is \$60\.00 USD/);
+  assert.equal(cardElement('receiptReceivedRow').hidden, false);
+  assert.equal(cardElement('receiptReceived').textContent, '\$40.00 USD');
+});
+
+'use strict';
