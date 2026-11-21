@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#f1f4f4" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Erraza | Admin</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preload" href="/fonts/space-grotesk-var.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="site-header">
+      <div class="brand-group">
+        <span class="brand" aria-label="Erraza admin">
+          <svg class="brand-mark" viewBox="0 0 36 36" fill="none" aria-hidden="true">
+            <path d="M5 6h26l-4 6H5V6Zm0 9h21l-4 6H5v-6Zm0 9h26l-4 6H5v-6Z" fill="currentColor" />
+          </svg>
+          <span>Erraza Admin</span>
+        </span>
+        <span id="adminEmail" class="environment-label" hidden></span>
+      </div>
+      <nav class="header-actions" aria-label="Admin options">
+        <button class="text-button" id="logoutButton" type="button" hidden>Log out</button>
+      </nav>
+    </header>
+
+    <main class="checkout-layout" id="main">
+      <section class="checkout-card" id="loginCard" aria-labelledby="loginTitle">
+        <div class="form-heading">
+          <div><h1 id="loginTitle" tabindex="-1">Admin sign-in</h1><p>Erraza merchant administration.</p></div>
+          <span class="form-heading-mark" aria-hidden="true"><span class="icon icon-wallet"></span></span>
+        </div>
+        <form id="loginForm" novalidate>
+          <div class="field-labels"><label for="adminEmailInput">Email</label></div>
+          <input class="search-input" id="adminEmailInput" type="email" autocomplete="username" maxlength="254" required />
+          <div class="field-labels admin-field-gap"><label for="adminPasswordInput">Password</label></div>
+          <input class="search-input" id="adminPasswordInput" type="password" autocomplete="current-password" maxlength="256" required />
+          <button class="button button-primary continue-button" id="loginButton" type="submit">Sign in<span class="icon icon-arrow-right" aria-hidden="true"></span></button>
+          <p class="field-error" id="loginError" role="alert" hidden></p>
+          <p class="field-note">Administrator accounts are listed in the merchant ADMIN_EMAILS configuration.</p>
+        </form>
+      </section>
+
+      <section class="checkout-card" id="dashboardCard" aria-labelledby="dashboardTitle" hidden>
+        <div class="form-heading">
+          <div><h1 id="dashboardTitle" tabindex="-1">Merchant dashboard</h1><p>Payment operations and payer receipt settings.</p></div>
+          <span class="form-heading-mark" aria-hidden="true"><span class="icon icon-wallet"></span></span>
+        </div>
+
+        <div class="resume-notice" id="receiptsCard" role="status">
+          <div>
+            <p class="notice-title">Payer email receipts</p>
+            <p id="receiptsDescription">Loading…</p>
+          </div>
+          <div class="resume-actions">
+            <button class="text-button" id="receiptsToggle" type="button">Turn on</button>
+          </div>
+        </div>
+        <p class="field-note" id="receiptsConfigNote" hidden>Resend is not configured (RESEND_API_KEY, EMAIL_FROM) — receipts cannot be sent until it is.</p>
+
+        <section class="admin-section" aria-labelledby="attemptsTitle">
+          <h2 id="attemptsTitle" class="notice-title">Unsettled payments</h2>
+          <ul class="admin-list" id="attemptsList"><li>Loading…</li></ul>
+        </section>
+        <section class="admin-section" aria-labelledby="alertsTitle">
+          <h2 id="alertsTitle" class="notice-title">Open alerts</h2>
+          <ul class="admin-list" id="alertsList"><li>Loading…</li></ul>
+        </section>
+        <section class="admin-section" aria-labelledby="runsTitle">
+          <h2 id="runsTitle" class="notice-title">Recent reconciliation runs</h2>
+          <ul class="admin-list" id="runsList"><li>Loading…</li></ul>
+        </section>
+        <p class="field-note">Receipt collection is off by default. The toggle is stored server-side and survives redeploys while the reconciliation cron runs.</p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>Erraza merchant administration</p>
+      <button class="text-button install-button" type="button" data-install-app hidden>Add to home screen</button>
+    </footer>
+  </div>
+  <p class="sr-only" id="announcer" role="status" aria-live="polite"></p>
+</body>
+</html>

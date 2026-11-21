@@ -30,6 +30,7 @@
     'networkCaution', 'paymentExpiry', 'paymentExpiryValue', 'cardPayment', 'externalCheckout', 'cardDestinationNote',
     'paymentReceipt', 'receiptOrder', 'copyOrderButton', 'receiptAmount', 'receiptMerchant', 'receiptReferenceRow', 'receiptReference', 'receiptMethod', 'receiptAssetRow', 'receiptAsset',
     'receiptReceivedRow', 'receiptReceived',
+    'receiptField', 'payerEmailInput', 'receiptConsent', 'payerEmailError',
     'receiptCreatedRow', 'receiptCreated', 'copyFallback', 'copyFallbackValue', 'copyFeedback', 'statusCheckMessage',
     'checkStatusButton', 'checkStatusLabel', 'storageNote', 'missingPaymentActions', 'forgetPaymentButton',
     'stalePaymentActions', 'dismissPaymentButton', 'statusGuideSection', 'statusGuideButton',
@@ -54,6 +55,9 @@
     assetsController: null,
     currency: '',
     method: 'card',
+    payerEmail: '',
+    receiptConsent: false,
+    receiptsAvailable: false,
     reference: '',
     asset: '',
     amountTouched: false,
@@ -857,6 +861,17 @@
     el.checkoutErrorBox.hidden = !message;
   }
 
+  function renderReceiptField() {
+    el.receiptField.hidden = !state.receiptsAvailable;
+    if (!state.receiptsAvailable) {
+      state.payerEmail = '';
+      state.receiptConsent = false;
+      el.payerEmailInput.value = '';
+      el.receiptConsent.checked = false;
+      el.payerEmailError.hidden = true;
+    }
+  }
+
   function normalizeConfig(data) {
     if (!data || typeof data.configured !== 'boolean' || typeof data.sandbox !== 'boolean'
       || typeof data.fiatEnabled !== 'boolean' || !Array.isArray(data.currencies)
@@ -886,6 +901,10 @@
       maxAmount: data.maxAmount,
       csrfToken: validText(data.csrfToken, 4096) ? data.csrfToken : null,
       supportEmail: typeof data.supportEmail === 'string' ? data.supportEmail : null,
+      emailReceipts: data.emailReceipts && typeof data.emailReceipts === 'object'
+        && typeof data.emailReceipts.enabled === 'boolean' && typeof data.emailReceipts.configured === 'boolean'
+        ? { enabled: data.emailReceipts.enabled, configured: data.emailReceipts.configured }
+        : { enabled: false, configured: false },
     };
   }
 
@@ -927,10 +946,12 @@
     el.supportEmail.hidden = !emailValid;
     if (emailValid) el.supportEmail.href = `mailto:${encodeURIComponent(email)}`;
     else el.supportEmail.removeAttribute('href');
+    state.receiptsAvailable = Boolean(config.emailReceipts?.enabled && config.emailReceipts?.configured);
     renderAmount();
     renderMethod();
     renderAvailability();
     renderContinue();
+    renderReceiptField();
     if (state.guide) renderGuide();
   }
 
@@ -1280,6 +1301,7 @@
   function attemptFingerprint(body) {
     const parts = [body.amount, body.currency, body.method, body.asset ?? null, body.sourceOrderId ?? null, body.idempotencyKey];
     if (body.reference) parts.push(body.reference);
+    if (body.payerEmail) parts.push(body.payerEmail);
     return JSON.stringify(parts);
   }
 
@@ -1313,12 +1335,18 @@
         return;
       }
       const reference = window.PaymentLinks.reference(body.reference);
+      const payerEmail = body.payerEmail === undefined || body.payerEmail === '' ? '' : window.PaymentLinks.email(body.payerEmail);
       state.recoveryRequest = {
         amount: body.amount, currency: body.currency, method: body.method,
         ...(body.method === 'crypto' ? { asset: body.asset } : {}),
         ...(body.sourceOrderId ? { sourceOrderId: body.sourceOrderId } : {}),
-        ...(reference ? { reference } : {}), idempotencyKey: body.idempotencyKey,
+        ...(reference ? { reference } : {}),
+        ...(payerEmail ? { payerEmail } : {}), idempotencyKey: body.idempotencyKey,
       };
+      state.payerEmail = payerEmail;
+      state.receiptConsent = Boolean(payerEmail);
+      el.payerEmailInput.value = payerEmail;
+      el.receiptConsent.checked = Boolean(payerEmail);
       if (state.guide) {
         state.guidePaymentChanged = true;
         state.guideMessage = 'An earlier checkout attempt must be recovered before the buying guide can continue.';
@@ -1354,10 +1382,38 @@
       currency: state.currency,
       method: state.method,
       ...(state.reference ? { reference: state.reference } : {}),
+      ...(state.payerEmail ? { payerEmail: state.payerEmail } : {}),
       ...(state.method === 'crypto' ? { asset: state.asset } : {}),
       ...(state.rejectedRetryApproved && state.order?.orderId ? { sourceOrderId: state.order.orderId } : {}),
       idempotencyKey: state.idempotencyKey,
     };
+    // Receipt email: intent must be explicit before anything is stored.
+    if (state.receiptsAvailable && !state.recoveryRequest) {
+      const entered = el.payerEmailInput.value.trim();
+      if (entered && !state.receiptConsent) {
+        el.payerEmailError.textContent = 'Tick the receipt box, or clear the email to continue without a receipt.';
+        el.payerEmailError.hidden = false;
+        el.receiptConsent.focus();
+        return;
+      }
+      if (!entered && state.receiptConsent) {
+        el.payerEmailError.textContent = 'Enter your email address, or clear the checkbox.';
+        el.payerEmailError.hidden = false;
+        el.payerEmailInput.focus();
+        return;
+      }
+      if (entered) {
+        try { state.payerEmail = window.PaymentLinks.email(entered); }
+        catch (error) {
+          el.payerEmailError.textContent = error.message;
+          el.payerEmailError.hidden = false;
+          el.payerEmailInput.focus();
+          return;
+        }
+      } else { state.payerEmail = ''; }
+      state.receiptConsent = Boolean(state.payerEmail);
+      el.payerEmailError.hidden = true;
+    }
     const recovering = Boolean(state.recoveryRequest);
     state.checkoutBusy = true;
     rememberAttempt(body);
@@ -2064,6 +2120,15 @@
       el.amountInput.value = decimals === undefined ? button.dataset.amount : canonicalDecimal(button.dataset.amount, decimals);
       state.amountTouched = true;
       paymentDetailsChanged();
+    });
+    el.payerEmailInput.addEventListener('input', () => {
+      el.payerEmailError.hidden = true;
+      state.payerEmail = '';
+      paymentDetailsChanged();
+    });
+    el.receiptConsent.addEventListener('change', () => {
+      state.receiptConsent = el.receiptConsent.checked;
+      el.payerEmailError.hidden = true;
     });
     el.currencySelect.addEventListener('change', () => {
       state.currency = el.currencySelect.value;

@@ -118,6 +118,13 @@
               </div>
             </div>
 
+            <div class="receipt-field" id="receiptField" hidden>
+              <label class="field-label" for="payerEmailInput">Email for a receipt <span class="optional-label">(optional)</span></label>
+              <input class="search-input" id="payerEmailInput" type="email" inputmode="email" autocomplete="email" maxlength="254" placeholder="you@example.com" aria-describedby="receiptConsentNote payerEmailError" />
+              <label class="card-guide-check" for="receiptConsent"><input type="checkbox" id="receiptConsent" /><span>Send me an email receipt when this payment settles. The address is used only for this receipt.</span></label>
+              <p class="field-error" id="payerEmailError" aria-live="polite" hidden></p>
+            </div>
+
             <fieldset class="method-fieldset">
               <legend>Payment method</legend>
               <div class="method-options">
@@ -392,7 +399,7 @@
     </div>
     <div class="privacy-copy">
       <p>This browser remembers your payment so you can return and check its status. If a request is interrupted, it temporarily saves the details needed to avoid starting it twice.</p>
-      <p>Card and identity details are entered with the payment provider, not on this page. The provider’s privacy policy applies there.</p>
+      <p>Card and identity details are entered with the payment provider, not on this page. If you give an email address for a receipt, it is stored only with that payment, used only to send the receipt when the payment settles, and never shared or used for anything else.</p>
       <p>This checkout does not use third-party tracking scripts.</p>
     </div>
   </dialog>

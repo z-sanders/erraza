@@ -627,3 +627,13 @@ legend { padding: 0; }
   .method-option > input:checked + .method-option-content, .quick-amounts button[aria-pressed="true"], .asset-result[aria-pressed="true"] { outline: 2px solid Highlight; }
   .brand-mark { color: LinkText; }
 }
+.receipt-field { margin-top: 20px; }
+.receipt-field .field-label { display: block; }
+.receipt-field .search-input { margin-top: 8px; }
+.receipt-field .card-guide-check { min-height: 40px; font-size: 11px; }
+.admin-value { font-family: ui-monospace, monospace; font-size: 11px; overflow-wrap: anywhere; }
+.admin-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.admin-list { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 11px; color: var(--text-secondary); }
+.admin-list li { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 9px 11px; background: var(--surface-muted); }
+.admin-list .admin-value { color: var(--text); }
+.admin-field-gap { margin-top: 14px; }
