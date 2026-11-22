@@ -97,9 +97,6 @@
       ]
     }
   ],
-  "rewrites": [
-    { "source": "/api/admin/(login|logout|overview|receipts-toggle)", "destination": "/api/ops?admin-action=$1" }
-  ],
   "crons": [
     {
       "path": "/api/cron-reconcile",

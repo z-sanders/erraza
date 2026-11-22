@@ -291,7 +291,7 @@
     </div>
     <p class="storage-note" id="storageNote" hidden>Your browser could not save the return link. Keep this page open and keep your order reference for the merchant.</p>
     <div class="missing-payment-actions" id="missingPaymentActions" hidden><button class="text-button" id="forgetPaymentButton" type="button">Remove saved link</button><p>This only removes the link from this browser. It does not cancel a payment.</p></div>
-    <div class="missing-payment-actions" id="stalePaymentActions" hidden><button class="text-button" id="dismissPaymentButton" type="button">Dismiss this payment</button><p>Dismiss only removes this payment from this browser, so you can start a new one. It does not cancel the payment. If you sent funds, contact the merchant before paying again.</p></div>
+    <div class="missing-payment-actions" id="stalePaymentActions" hidden><label class="card-guide-check" for="dismissConfirm" id="dismissConfirmWrap" hidden><input type="checkbox" id="dismissConfirm" /><span>I have not sent and will not send funds to this payment address.</span></label><button class="text-button" id="dismissPaymentButton" type="button">Dismiss this payment</button><p>Dismiss only removes this payment from this browser, so you can start a new one. It does not cancel the payment. If you sent funds, contact the merchant before paying again.</p></div>
     <p class="dialog-footnote">Closing this window does not cancel your payment.</p>
     <button class="text-button dialog-help" id="paymentHelpButton" type="button" aria-haspopup="dialog" aria-controls="helpDialog">Need help with this payment?</button>
   </dialog>

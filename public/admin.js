@@ -59,7 +59,7 @@
   }
 
   async function loadOverview() {
-    const response = await fetch('/api/admin/overview', { credentials: 'same-origin', cache: 'no-store' });
+    const response = await fetch('/api/ops?admin-action=overview', { credentials: 'same-origin', cache: 'no-store' });
     if (response.status === 403) { setSignedIn(false); return; }
     if (!response.ok) throw new Error(`Overview failed (${response.status}).`);
     const body = await response.json();
@@ -73,7 +73,7 @@
     el.loginError.hidden = true;
     el.loginButton.disabled = true;
     try {
-      const response = await fetch('/api/admin/login', {
+      const response = await fetch('/api/ops?admin-action=login', {
         method: 'POST',
         credentials: 'same-origin',
         cache: 'no-store',
@@ -98,7 +98,7 @@
   });
 
   el.logoutButton.addEventListener('click', async () => {
-    try { await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* Cookie is cleared server-side regardless. */ }
+    try { await fetch('/api/ops?admin-action=logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* Cookie is cleared server-side regardless. */ }
     setSignedIn(false);
     announce('Signed out.');
   });
@@ -106,7 +106,7 @@
   el.receiptsToggle.addEventListener('click', async () => {
     el.receiptsToggle.disabled = true;
     try {
-      const response = await fetch('/api/admin/receipts-toggle', {
+      const response = await fetch('/api/ops?admin-action=receipts-toggle', {
         method: 'POST',
         credentials: 'same-origin',
         cache: 'no-store',

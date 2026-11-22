@@ -34,6 +34,7 @@
     'receiptCreatedRow', 'receiptCreated', 'copyFallback', 'copyFallbackValue', 'copyFeedback', 'statusCheckMessage',
     'checkStatusButton', 'checkStatusLabel', 'storageNote', 'missingPaymentActions', 'forgetPaymentButton',
     'stalePaymentActions', 'dismissPaymentButton', 'statusGuideSection', 'statusGuideButton',
+    'dismissConfirmWrap', 'dismissConfirm',
     'paymentHelpButton', 'helpDialog', 'helpTitle', 'privacyDialog', 'privacyTitle', 'supportEmail', 'announcer',
     'cryptoGuideButton', 'fiatGuideButton', 'helpGuideButton', 'helpGuideBlocked', 'cardRecovery', 'rejectedCardGuideButton',
     'cardGuideNotice', 'cardGuideNoticeText', 'resumeGuideButton', 'cancelGuideButton', 'cardGuideDialog', 'cardGuideTitle',
@@ -723,11 +724,19 @@
     return STALE_GUIDE_STATUSES.includes(order.status);
   }
 
+  // A fresh payment whose address or checkout link is still live could receive
+  // funds at any moment, so dismissing it requires the payer's explicit
+  // confirmation instead of the stale-payment shortcut.
+  function needsDismissConfirmation(order) {
+    if (!order || order.complete || order.actuallyPaid || stalePayment(order)) return false;
+    if (settledOrder(order) || order.status === 'rejected') return false;
+    return Boolean(order.payment?.address) || Boolean(order.checkoutUrl);
+  }
+
   function canDismissOrder(order) {
     if (!order || order.complete) return false;
-    // A card checkout that never surfaced a provider link cannot have been paid,
-    // so it can be dismissed immediately instead of waiting out the stale window.
     if (order.method === 'card' && order.status === 'unknown' && !order.checkoutUrl) return true;
+    if (needsDismissConfirmation(order)) return true;
     return order.status === 'rejected' || settledOrder(order) || stalePayment(order);
   }
 
@@ -787,6 +796,7 @@
     // would be silently undone, so wait for the checkout to settle first.
     if (!token || state.checkoutBusy
       || (state.order ? !canDismissOrder(state.order) : !canDismissSaved())) return;
+    if (needsDismissConfirmation(state.order) && !el.dismissConfirm.checked) return;
     rememberDismissedToken(token);
     const applied = dropDismissedLocalPayment();
     const message = 'This payment was dismissed in this browser, so you can start a new one. Dismissing did not cancel it. If you sent funds, contact the merchant before paying again.';
@@ -1545,7 +1555,7 @@
         title: ready ? (order.method === 'card' ? 'Continue with your card' : 'Ready when you are') : 'Preparing your payment',
         description: ready ? (order.method === 'card'
           ? 'Open the provider’s checkout below. This page will check the payment status when you return.'
-          : 'Use the exact coin, network and amount below. This page checks the payment status with the provider.')
+          : 'Use the exact coin, network and amount below. This page checks the payment status with the provider. Made a mistake? You can dismiss this payment below and start a new one, as long as you have not sent funds to the address.')
           : 'Your payment reference is saved. The provider is preparing the payment details; there’s no need to start another payment.',
         tone: 'pending', icon: order.method === 'card' ? 'credit-card' : 'wallet',
       };
@@ -1708,7 +1718,10 @@
     }
     el.missingPaymentActions.hidden = !referenceUnresolvable();
     el.stalePaymentActions.hidden = referenceUnresolvable() || !canDismissOrder(order);
-    el.dismissPaymentButton.disabled = state.checkoutBusy;
+    const confirmNeeded = needsDismissConfirmation(order);
+    el.dismissConfirmWrap.hidden = !confirmNeeded;
+    el.dismissConfirm.checked = confirmNeeded && el.dismissConfirm.checked;
+    el.dismissPaymentButton.disabled = state.checkoutBusy || (confirmNeeded && !el.dismissConfirm.checked);
     // The rejected/recovery section covers terminal card problems; this entry
     // covers every other card dead end so the payer always sees the crypto path
     // here, without hunting through help or switching methods first.
@@ -1798,7 +1811,7 @@
     if (!exists) return;
     const order = state.order;
     const dismissible = canDismissSaved();
-    el.dismissNoticeButton.hidden = !dismissible;
+    el.dismissNoticeButton.hidden = !dismissible || needsDismissConfirmation(state.order);
     el.dismissNoticeButton.disabled = state.checkoutBusy;
     el.resumeTitle.textContent = order ? statusPresentation(order).title : 'Your previous payment';
     el.resumeDescription.textContent = order?.complete ? 'Your receipt is available to review.'
@@ -2298,6 +2311,9 @@
     });
     el.externalCheckout.addEventListener('click', () => {
       el.statusCheckMessage.textContent = 'Finish in the provider’s tab, then return here to check the payment status.';
+    });
+    el.dismissConfirm.addEventListener('change', () => {
+      el.dismissPaymentButton.disabled = state.checkoutBusy || (needsDismissConfirmation(state.order) && !el.dismissConfirm.checked);
     });
     el.dismissNoticeButton.addEventListener('click', dismissPayment);
     el.dismissPaymentButton.addEventListener('click', dismissPayment);

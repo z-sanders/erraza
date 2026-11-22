@@ -13,7 +13,7 @@ function customerUi(overrides = {}) {
   };
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   assert.match(source, /  boot\(\);\s*\}\)\(\);\s*$/);
-  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset, referenceUnresolvable, dropDismissedLocalPayment, partialRemainder, subtractDecimals };\n})();');
+  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset, referenceUnresolvable, dropDismissedLocalPayment, partialRemainder, subtractDecimals, needsDismissConfirmation };\n})();');
   const storage = () => {
     const map = new Map();
     return {
@@ -567,3 +567,47 @@ test('crypto partial payments with an ended window defer to the merchant; card s
 });
 
 'use strict';
+
+
+test("a fresh crypto payment dismisses only after confirming nothing was sent", () => {
+  const { ui, element } = customerUi();
+  ui.state.saved = { token: "tok_fresh", timestamp: Date.now() };
+  ui.state.token = "tok_fresh";
+  ui.state.order = cardOrder({
+    status: "waiting", terminal: false, method: "crypto", ageHours: 2,
+    asset: { code: "usdt", ticker: "USDT", name: "Tether", network: "Ethereum", extraIdRequired: false },
+    payment: { address: "0xfixture0000000000000000000000000000000", amount: "100.00", currency: "usdt", memo: null, qrDataUrl: null, expiresAt: null },
+  });
+  readyAssets(ui);
+  ui.renderOrder();
+  assert.equal(ui.needsDismissConfirmation(ui.state.order), true);
+  assert.equal(ui.canDismissOrder(ui.state.order), true);
+  ui.renderResume();
+  assert.equal(element("dismissNoticeButton").hidden, true, "the banner cannot bypass the confirmation");
+  assert.equal(element("dismissConfirmWrap").hidden, false);
+  assert.equal(element("dismissPaymentButton").disabled, true, "disabled until the confirmation is ticked");
+  assert.match(ui.statusPresentation(ui.state.order).description, /Made a mistake\? You can dismiss this payment below/);
+  element("dismissConfirm").checked = true;
+  ui.dismissPayment();
+  assert.equal(ui.state.token, null);
+  assert.equal(ui.state.saved, null);
+  assert.equal(element("resumeNotice").hidden, true);
+  assert.equal(element("continueButton").disabled, false);
+});
+
+test("a stale crypto payment needs no confirmation and dismisses immediately", () => {
+  const { ui, element } = customerUi();
+  ui.state.order = cardOrder({
+    status: "waiting", terminal: false, method: "crypto", ageHours: 25,
+    asset: { code: "usdt", ticker: "USDT", name: "Tether", network: "Ethereum", extraIdRequired: false },
+    payment: { address: "0xfixture0000000000000000000000000000000", amount: "100.00", currency: "usdt", memo: null, qrDataUrl: null, expiresAt: null },
+  });
+  readyAssets(ui);
+  ui.renderOrder();
+  assert.equal(ui.needsDismissConfirmation(ui.state.order), false);
+  assert.equal(element("dismissConfirmWrap").hidden, true);
+  assert.equal(element("dismissNoticeButton").hidden, false);
+  ui.dismissPayment();
+  assert.equal(ui.state.token, null);
+  assert.equal(element("continueButton").disabled, false);
+});
