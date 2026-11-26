@@ -193,6 +193,33 @@ test('operator identity is required for cron and ops endpoints', async () => {
   await new Promise(resolve => server.close(resolve));
 });
 
+test('scheduled reconciliation uses CRON_SECRET without granting operator access', async () => {
+  const reconciliationSecret = 'o'.repeat(32);
+  const cronSecret = 'c'.repeat(32);
+  const store = memoryStore();
+  let claims = 0;
+  store.rpc = async (name) => {
+    assert.equal(name, 'erraza_reconcile_claim');
+    claims += 1;
+    return { claims: [] };
+  };
+  store.recordRun = async () => {};
+  const handlers = createHandlers({ config: { ...config, reconciliationSecret, cronSecret }, store, provider: providerDouble() });
+  const auth = secret => ({ authorization: `Bearer ${secret}` });
+  const runCron = (method, secret) => call(handlers['cron-reconcile'], {
+    method, url: '/api/cron-reconcile', headers: auth(secret), ...(method === 'POST' ? { body: {} } : {}),
+  });
+
+  assert.equal((await runCron('GET', reconciliationSecret)).status, 401);
+  assert.equal((await runCron('POST', cronSecret)).status, 401);
+  assert.equal((await call(handlers.ops, { headers: auth(cronSecret) })).status, 401);
+  assert.equal((await call(handlers.reconcile, { method: 'POST', headers: auth(cronSecret), body: {} })).status, 401);
+  assert.equal(claims, 0);
+  assert.equal((await runCron('GET', cronSecret)).status, 200);
+  assert.equal((await runCron('POST', reconciliationSecret)).status, 200);
+  assert.equal(claims, 2);
+});
+
 test('monitoring migration locks down tables and functions to the service role', () => {
   const migration = readFileSync(resolve(__dirname, '../supabase-monitoring.sql'), 'utf8');
   for (const table of ['erraza_ops_alerts', 'erraza_reconcile_runs']) {

@@ -35,7 +35,8 @@ Copy `.env.example` to `.env` for local development; populate production values 
 | `MIN_PAYMENT_AMOUNT`, `MAX_PAYMENT_AMOUNT` | Defaults `1` and `100000`, in the selected pricing currency. These are not FX-normalized limits; provider minimums may be higher. |
 | `NOWPAYMENTS_FIAT_ENABLED` | Optional override, defaults to `true` for this already-activated merchant account. Set `false` only to intentionally turn card payments off. This setting is not an account-approval check. |
 | `NOWPAYMENTS_FIAT_REDIRECT_HOSTS` | Optional additional restriction on provider-returned checkout URLs. Leave blank for normal operation, or specify exact comma-separated hosts. Malformed restrictions disable fiat rather than silently dropping restrictions. |
-| `RECONCILIATION_SECRET` | Optional separate random secret of at least 32 characters for the merchant-only manual reconciliation endpoint. Empty disables that endpoint. Never expose it to browsers. |
+| `RECONCILIATION_SECRET` | Optional separate random secret of at least 32 characters for manual merchant reconciliation and ops. Empty disables those endpoints. Never expose it to browsers. |
+| `CRON_SECRET` | Separate random secret of at least 32 characters for the scheduled `GET /api/cron-reconcile` call. Vercel sends it as a bearer token in production. If unset, scheduled GETs require the operator secret, as before. |
 | `SUPABASE_ANON_KEY` | Optional public Supabase client credential for the admin dashboard's Supabase Auth sign-in. Falls back to the service-role key server-side when absent. |
 | `ADMIN_EMAILS` | Optional comma-separated administrator emails. Members may sign in at /admin.html with their Supabase Auth password. Empty disables the dashboard. |
 | `EMAIL_RECEIPTS_ENABLED` | Optional env default for payer email receipts; the runtime toggle in /admin.html overrides it. Defaults to false. |
@@ -126,7 +127,7 @@ Localhost cannot receive internet webhooks. To test provider callbacks, use a tr
 8. Set `PUBLIC_BASE_URL` to the final HTTPS origin and make `/api/ipn` reachable by NOWPayments. Vercel deployment protection or an authentication interstitial must not intercept this route. Verify the deployed IPN path does not redirect or require a browser session.
 9. Inspect deployment output: publish only intended public assets; `.env*`, order/customer records, tests, local tooling, and credentials must not appear. Ignore files reduce accidental uploads but do not revoke already leaked credentials or delete tracked history.
 10. With merchant authorization, perform controlled provider validation: creation, destination/network/memo, exact amount/minimums, signed IPN delivery, non-final versus final settlement, underpayment, retry/idempotency, late-deposit review, and optional fiat KYC/return behavior. Inspect the provider dashboard and Supabase records, not just the UI.
-11. Establish alerts for rejected IPNs, provider errors, Supabase failures, and unresolved attempts. Schedule/automate reconciliation only as a separate reviewed operational change; this repository provisions no cron job.
+11. Apply `supabase-monitoring.sql` after the base migration and configure a separate production `CRON_SECRET`. The native Vercel cron in `vercel.json` runs reconciliation once daily (04:00–04:59 UTC on Hobby). Verify the first scheduled run in Vercel logs. Establish alerts for rejected IPNs, provider errors, Supabase failures, and unresolved attempts.
 
 **Unperformed launch gates:** deployment verification, real Supabase integration, provider-issued signature fixtures (including nested arrays), account-specific fiat behavior, and an authorized end-to-end live payment must be checked in the target environment. Neither build nor fixture tests certify these.
 

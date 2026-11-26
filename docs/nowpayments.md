@@ -77,7 +77,9 @@ The merchant has confirmed that fiat activation/KYC is complete. `NOWPAYMENTS_FI
 
 ## Manual reconciliation and operations
 
-`POST /api/reconcile` is an optional operator-only endpoint, enabled by a separate `RECONCILIATION_SECRET` of at least 32 characters. It expects `Authorization: Bearer <secret>` and JSON `{ "orderId": "...", "paymentId": "..." }`; the provider payment ID is optional when already known. Without the secret configured, it is unavailable. No cron is provisioned and this is not a browser/customer API.
+`POST /api/reconcile` is an optional operator-only endpoint, enabled by a separate `RECONCILIATION_SECRET` of at least 32 characters. It expects `Authorization: Bearer <secret>` and JSON `{ "orderId": "...", "paymentId": "..." }`; the provider payment ID is optional when already known. Without the secret configured, it is unavailable. This is not a browser/customer API.
+
+`vercel.json` schedules `GET /api/cron-reconcile` daily at 04:00 UTC; on Hobby it can run any time during that hour. Set a separate production `CRON_SECRET` so Vercel can authenticate the request. Manual batch runs use `POST /api/cron-reconcile` with `RECONCILIATION_SECRET`.
 
 After checking the provider dashboard, the merchant can reconcile a known payment or attach the verified provider ID to an uncertain creation attempt. Confirm the merchant account and order association first. The endpoint must still enforce all identity/type/amount checks rather than overriding an order to “paid.” An expired payment may receive a late deposit without another IPN, so an operational dashboard/reconciliation procedure is necessary even with functioning webhooks.
 
