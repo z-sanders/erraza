@@ -53,7 +53,9 @@ Keep sandbox/preview and live resources separate. Changing the public origin or 
 
 ### Supabase migration order
 
-Apply `supabase-migration.sql` to each target Supabase database **before** deploying or starting application code that uses it. Migration first, runtime configuration second, code deployment last: this prevents the deployed handlers from reaching a database whose required schema is absent.
+Apply `supabase-migration.sql` to a **new** Supabase database, then `supabase-monitoring.sql` and `supabase-abandonment.sql`, before enabling the corresponding features. On an existing database with the base and monitoring migrations, apply only `supabase-abandonment.sql`; do not rerun the base migration over live orders.
+
+`CHECKOUT_ABANDON_ENABLED` defaults to off. Enable it only after testing the migration against an isolated database. This allows a verified unpaid crypto checkout to release its local slot without canceling the provider payment. If you disable the feature, leave the migration and existing markers in place: a released order and its replacement can both still be open at the provider.
 
 The application runtime needs only `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY`. A direct Postgres database connection string/password may be used by an administrator or migration tool to apply the SQL migration, but it is not an application or Vercel runtime environment variable and must not be exposed to the frontend. You may instead apply the migration through the Supabase SQL editor. Keep migration credentials out of `.env.example`, browser code, and deployment output.
 
@@ -140,6 +142,7 @@ Localhost cannot receive internet webhooks. To test provider callbacks, use a tr
 | `GET /api/estimate` | Validated quote and minimum information. |
 | `GET /api/min-amount` | Network/payout-specific minimum in the requested pricing currency. |
 | `POST /api/checkout` | Validate input and session, reserve an idempotent attempt, create the provider payment. |
+| `POST /api/abandon` | With the feature enabled, release a verified unpaid crypto checkout for its owner. Does not cancel the provider payment. |
 | `GET /api/status` | Authorized order lookup/reconciliation; returns authoritative receipt state. |
 | `POST /api/ipn` | Signature-authenticated provider callback, guarded persisted state updates. |
 | `POST /api/reconcile` | Optional operator-only manual reconciliation; never a customer endpoint. |

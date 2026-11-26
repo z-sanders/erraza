@@ -9,7 +9,7 @@ const { HttpError } = require('../lib/http');
 
 const config = {
   configured: true, deployed: false, vercel: false, sandbox: false, origin: 'https://checkout.example',
-  brand: 'Erraza', supportEmail: null, apiKey: 'test-api-key-not-real', ipnSecret: 'test-ipn-not-real',
+  brand: 'Erraza', supportEmail: null, apiKey: 'test-api-key-not-real', ipnSecret: 'test-ipn-not-real', providerAccount: 'a'.repeat(20),
   checkoutSecret: 'test-only-secret-with-at-least-32-characters', apiBase: 'https://api.nowpayments.io/v1',
   redisUrl: 'https://redis.example', redisToken: 'test-only', minAmount: '1', maxAmount: '100000',
   fiatEnabled: true, fiatRedirectHosts: ['pay.provider.example'], payoutCurrency: 'btc',
@@ -43,7 +43,8 @@ function memoryStore() {
           return { created: false, reason: 'idempotent', order: structuredClone(orders.get(prior.orderId)) };
         }
         const unresolved = [...orders.values()].find(candidate =>
-          candidate.principal === order.principal && !['finished', 'failed', 'expired', 'refunded'].includes(candidate.status)
+          candidate.principal === order.principal && !candidate.abandonedAt
+            && !['finished', 'failed', 'expired', 'refunded'].includes(candidate.status)
         );
         if (unresolved) return { created: false, reason: 'unresolved', order: structuredClone(unresolved) };
         idem.set(key, { fingerprint, orderId: order.id });
@@ -54,6 +55,19 @@ function memoryStore() {
       }
     },
     async getOrder(id) { return orders.has(id) ? structuredClone(orders.get(id)) : null; },
+    async abandon(id, principal, expectedVersion) {
+      const order = orders.get(id);
+      if (!order || order.principal !== principal) return { status: 'missing' };
+      if (order.abandonedAt) return { status: 'existing', order: structuredClone(order) };
+      if (order.version !== expectedVersion) return { status: 'conflict' };
+      if (order.method !== 'crypto' || !['new', 'waiting'].includes(order.status) || order.complete !== false
+        || !order.paymentId || !order.expectedPayAmount || order.fundsObserved !== false
+        || (order.actuallyPaid != null && order.actuallyPaid !== '0')) return { status: 'blocked' };
+      const now = new Date().toISOString();
+      const next = { ...order, abandonedAt: now, updatedAt: now, version: order.version + 1 };
+      orders.set(id, structuredClone(next));
+      return { status: 'abandoned', order: structuredClone(next) };
+    },
     async update(id, transform) {
       const old = orders.get(id);
       if (!old) throw new HttpError(404, 'order_not_found', 'Not found');

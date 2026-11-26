@@ -40,6 +40,7 @@ function loadRoutes() {
     ['/api/estimate', require('./api/estimate.js')],
     ['/api/min-amount', require('./api/min-amount.js')],
     ['/api/checkout', require('./api/checkout.js')],
+    ['/api/abandon', require('./api/abandon.js')],
     ['/api/status', require('./api/status.js')],
     ['/api/ipn', require('./api/ipn.js')],
     ['/api/reconcile', require('./api/reconcile.js')],
@@ -119,7 +120,7 @@ function createServer({ handlers } = {}) {
   // Dependency injection is explicit and only for tests; the CLI never supplies it.
   const routes = handlers === undefined ? loadRoutes()
     : handlers instanceof Map ? new Map(handlers) : new Map(Object.entries(handlers));
-  const allowedRoutes = new Set(['/api/config', '/api/currencies', '/api/estimate', '/api/min-amount', '/api/checkout', '/api/status', '/api/ipn', '/api/reconcile', '/api/cron-reconcile', '/api/ops', '/api/admin/login', '/api/admin/logout', '/api/admin/overview', '/api/admin/receipts-toggle']);
+  const allowedRoutes = new Set(['/api/config', '/api/currencies', '/api/estimate', '/api/min-amount', '/api/checkout', '/api/abandon', '/api/status', '/api/ipn', '/api/reconcile', '/api/cron-reconcile', '/api/ops', '/api/admin/login', '/api/admin/logout', '/api/admin/overview', '/api/admin/receipts-toggle']);
   // 'ops-dispatch' is an internal multiplexer (one function serves /api/ops and the
   // admin routes under the Hobby function cap) and is never a served path itself.
   const invalidRoute = [...routes].some(([route, handler]) => route !== '/api/ops-dispatch' && (!allowedRoutes.has(route) || typeof handler !== 'function'));

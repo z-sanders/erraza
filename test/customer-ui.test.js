@@ -5,15 +5,15 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { randomUUID } = require('node:crypto');
 
-function customerUi(overrides = {}) {
+function customerUi(overrides = {}, { fetch: fetchImpl, localStorage: sharedStorage } = {}) {
   const elements = new Map();
   const element = id => {
-    if (!elements.has(id)) elements.set(id, { value: '', hidden: false, disabled: false, textContent: '', dataset: {}, className: '', classList: { toggle() {}, add() {}, remove() {} }, setAttribute() {}, getAttribute: () => null, removeAttribute() {}, append() {}, replaceChildren() {}, querySelector: () => null, querySelectorAll: () => [] });
+    if (!elements.has(id)) elements.set(id, { value: '', hidden: false, disabled: false, textContent: '', dataset: {}, className: '', classList: { toggle() {}, add() {}, remove() {} }, setAttribute() {}, getAttribute: () => null, removeAttribute() {}, append() {}, replaceChildren() {}, querySelector: () => null, querySelectorAll: () => [], focus() {}, showModal() { this.open = true; }, close() { this.open = false; } });
     return elements.get(id);
   };
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   assert.match(source, /  boot\(\);\s*\}\)\(\);\s*$/);
-  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset, referenceUnresolvable, dropDismissedLocalPayment, partialRemainder, subtractDecimals, needsDismissConfirmation };\n})();');
+  const instrumented = source.replace(/  boot\(\);\s*\}\)\(\);\s*$/, '  globalThis.ui = { state, renderAvailability, renderMethod, renderContinue, renderHeading, canCreateCheckout, applyPresetLink, openHelp, renderResume, renderOrder, renderAmount, statusPresentation, canDismissOrder, canDismissSaved, validGuideCardSource, dismissedTokens, dismissPayment, readSavedPayment, applyPresetFromLink, maybeApplyPendingPreset, referenceUnresolvable, dropDismissedLocalPayment, partialAmounts, subtractDecimals, needsDismissConfirmation, adoptOrder, resumePayment, syncPaymentStorage, activePaymentToken, checkStatus, handleOffline, copyPayment, updateExpiry };\n})();');
   const storage = () => {
     const map = new Map();
     return {
@@ -22,11 +22,14 @@ function customerUi(overrides = {}) {
       removeItem: key => map.delete(key),
     };
   };
-  const localStorageStore = storage();
+  const localStorageStore = sharedStorage || storage();
   const sessionStorageStore = storage();
+  const navigator = { onLine: true };
   const context = vm.createContext({
     document: { getElementById: element },
     window: { crypto: { randomUUID }, PaymentLinks: require('../public/payment-links'), setTimeout: () => 0, clearTimeout() {}, addEventListener() {} },
+    AbortController, URL, URLSearchParams, navigator,
+    fetch: fetchImpl || (async () => { throw new Error('No fixture response'); }),
     localStorage: localStorageStore,
     sessionStorage: sessionStorageStore,
   });
@@ -45,7 +48,7 @@ function customerUi(overrides = {}) {
     },
   });
   element('amountInput').value = '100.00';
-  return { ui, element, localStorage: localStorageStore };
+  return { ui, element, navigator, localStorage: localStorageStore };
 }
 
 test('fully configured fiat checkout has no setup notice and enables Continue', () => {
@@ -244,49 +247,43 @@ function readyAssets(ui) {
   ui.state.assets = [{ code: 'btc', ticker: 'BTC', name: 'Bitcoin', network: 'Bitcoin', extraIdRequired: false }];
 }
 
-test('a stale unverified card payment can be dismissed and offers the crypto path', () => {
+test('a stale unverified card payment keeps its checkout lock and offers the crypto guide', () => {
   const { ui, element } = customerUi();
   ui.state.order = cardOrder();
   ui.state.token = ui.state.order.token;
   ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
   readyAssets(ui);
   ui.renderOrder();
-  assert.equal(element('stalePaymentActions').hidden, false);
+  assert.equal(element('stalePaymentActions').hidden, true);
   assert.equal(element('statusGuideSection').hidden, false);
   assert.equal(element('statusGuideButton').disabled, false);
-  assert.equal(element('dismissNoticeButton').hidden, false);
-  assert.match(element('resumeDescription').textContent, /Dismiss it to start a new payment/);
-  assert.match(ui.statusPresentation(ui.state.order).description, /crypto option below/);
-  assert.match(ui.statusPresentation(ui.state.order).description, /dismiss this payment/);
+  assert.equal(element('dismissNoticeButton').hidden, true);
+  assert.equal(ui.canCreateCheckout(), false);
+  assert.match(ui.statusPresentation(ui.state.order).description, /Don’t pay again yet/);
 });
 
-test('a fresh card checkout that never opened is dismissible and offers the crypto path', () => {
+test('a card checkout that never opened does not claim there was no charge', () => {
   const { ui, element } = customerUi();
   ui.state.order = cardOrder({ ageHours: 2, status: 'unknown', terminal: false });
   ui.state.token = ui.state.order.token;
   ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
   readyAssets(ui);
   ui.renderOrder();
-  assert.equal(element('stalePaymentActions').hidden, false, 'nothing could have been charged, so dismissal is immediate');
-  assert.equal(element('dismissNoticeButton').hidden, false);
-  assert.equal(ui.canDismissOrder(ui.state.order), true);
-  assert.equal(element('statusGuideSection').hidden, false, 'the crypto guide is offered right on the status dialog');
+  assert.equal(element('stalePaymentActions').hidden, true);
+  assert.equal(element('dismissNoticeButton').hidden, true);
+  assert.equal(ui.canDismissOrder(ui.state.order), false);
+  assert.equal(element('statusGuideSection').hidden, false);
   assert.equal(element('statusGuideButton').disabled, false);
   assert.equal(ui.validGuideCardSource(ui.state.order), true);
-  // The dialog answers with one short block instead of stacked warnings.
   const presentation = ui.statusPresentation(ui.state.order);
-  assert.equal(presentation.title, 'Nothing was charged');
-  assert.equal(presentation.hideProviderMessage, true);
+  assert.equal(presentation.title, 'Card checkout didn’t open');
+  assert.match(presentation.description, /couldn’t confirm this checkout/);
   assert.equal(element('providerMessage').hidden, true);
-  assert.equal(element('cardPayment').hidden, true, 'the on-ramp section is noise without a checkout link');
-  // A card unknown that DID surface a checkout link keeps the cautious copy.
+  assert.equal(element('cardPayment').hidden, true);
   const opened = cardOrder({ ageHours: 2, status: 'unknown', terminal: false, checkoutUrl: 'https://pay.provider.example/checkout/fixture' });
-  const openedPresentation = ui.statusPresentation(opened);
-  assert.equal(openedPresentation.hideProviderMessage, undefined);
-  assert.match(openedPresentation.description, /Don’t start a separate payment yet/);
-  // Crypto unknown keeps the cautious copy too — funds could have been sent.
+  assert.match(ui.statusPresentation(opened).description, /check the status before trying again/);
   const cryptoUnknown = cardOrder({ ageHours: 2, method: 'crypto', status: 'unknown', terminal: false });
-  assert.match(ui.statusPresentation(cryptoUnknown).description, /Don’t start a separate payment yet/);
+  assert.match(ui.statusPresentation(cryptoUnknown).description, /check the status before trying again/);
 });
 
 test('a rejected card checkout settles immediately and points to the crypto guide', () => {
@@ -317,9 +314,9 @@ test('terminal card problems stay dismissible and usable as the guide source', (
   assert.equal(ui.validGuideCardSource(complete), false);
 });
 
-test('dismissing removes the payment locally, records the token, and unlocks Continue', () => {
+test('removing a terminal payment saves a local dismissal without claiming cancellation', async () => {
   const { ui, element } = customerUi();
-  ui.state.order = cardOrder();
+  ui.state.order = cardOrder({ status: 'failed', terminal: true });
   ui.state.token = ui.state.order.token;
   ui.state.saved = { token: ui.state.order.token, timestamp: Date.now() };
   ui.state.idempotencyKey = '00000000-0000-4000-8000-000000000000';
@@ -344,7 +341,7 @@ test('a dismissed saved payment no longer resumes from storage', () => {
   assert.equal(ui.readSavedPayment()?.token, token);
   localStorage.setItem('pay_page.dismissed.v1', JSON.stringify([token]));
   assert.equal(ui.readSavedPayment(), null);
-  assert.equal(localStorage.getItem('pay_page.resume.v1'), null);
+  assert.equal(JSON.parse(localStorage.getItem('pay_page.resume.v1')).token, token, 'a local dismissal does not delete the shared pointer');
 });
 
 test('checkout page exposes the link creator, larger presets, and reworked guidance copy', () => {
@@ -355,7 +352,7 @@ test('checkout page exposes the link creator, larger presets, and reworked guida
   assert.match(markup, /Guide me: buy crypto with a card/);
   assert.match(markup, /id="stalePaymentActions"/);
   assert.match(markup, /id="statusGuideButton"/);
-  assert.match(markup, /Dismiss this payment/);
+  assert.match(markup, /Removing the saved link does not cancel/);
 });
 
 test('a link preset applies over a settled earlier payment', () => {
@@ -384,26 +381,23 @@ test('an unresolved payment keeps a pending preset with an explicit choice', () 
   ui.renderResume();
   assert.equal(element('presetNotice').hidden, false);
   assert.match(element('presetNoticeTitle').textContent, /This payment link is for €125\.50 EUR/);
-  assert.match(element('presetNoticeText').textContent, /isn’t finished yet/);
-  assert.equal(element('applyPresetButton').disabled, true, 'fresh unresolved payments cannot be overridden');
+  assert.match(element('presetNoticeText').textContent, /Review the earlier payment first/);
+  assert.equal(element('applyPresetButton').disabled, false, 'the button opens status for review, not a replacement');
 });
 
-test('a stale earlier payment lets the payer apply the link amount explicitly', () => {
-  const { ui, element, localStorage } = customerUi();
+test('applying a preset opens the blocking payment without bypassing release', () => {
+  const { ui, element } = customerUi();
   ui.state.presetSearch = '?amount=125.50&currency=eur';
-  ui.state.saved = { token: 'tok_stale_payment_pending_1', timestamp: Date.now() - 25 * HOUR };
+  const token = 'tok_stale_payment_pending_1';
+  ui.state.saved = { token, timestamp: Date.now() - 25 * HOUR };
   ui.applyPresetLink();
-  ui.renderResume();
-  assert.equal(element('applyPresetButton').disabled, false);
-  assert.match(element('presetNoticeText').textContent, /does not cancel the payment/);
   ui.applyPresetFromLink();
-  assert.equal(element('amountInput').value, '125.50');
-  assert.equal(ui.state.currency, 'eur');
-  assert.equal(ui.state.presetPending, null);
-  assert.equal(element('presetNotice').hidden, true);
-  assert.deepEqual([...ui.dismissedTokens()], ['tok_stale_payment_pending_1']);
-  assert.equal(element('continueButton').disabled, false);
-  assert.match(element('checkoutError').textContent, /did not cancel/);
+  assert.equal(ui.state.token, token);
+  assert.equal(element('paymentDialog').open, true);
+  assert.equal(element('amountInput').value, '100.00');
+  assert.equal(ui.state.presetPending?.amount, '125.50');
+  assert.deepEqual([...ui.dismissedTokens()], []);
+  assert.equal(element('continueButton').disabled, true);
 });
 
 test('settling the earlier payment auto-applies the pending preset', () => {
@@ -488,126 +482,173 @@ test('an unverifiable reference offers removal in the payment dialog', () => {
 });
 
 
-test('crypto partial payments self-serve the exact coin shortfall while the window is live', () => {
-  const { ui, element } = customerUi();
-  ui.state.order = cardOrder({
-    status: 'partially_paid', terminal: false, method: 'crypto',
-    asset: { code: 'usdt', ticker: 'USDT', name: 'Tether', network: 'Ethereum', extraIdRequired: false },
-    actuallyPaid: '0.0004',
-    payment: { address: '0xfixture0000000000000000000000000000000', amount: '0.001', currency: 'usdt', memo: null, qrDataUrl: null, expiresAt: null },
+function cryptoOrder(overrides = {}) {
+  return cardOrder({
+    status: 'waiting', terminal: false, method: 'crypto', actuallyPaid: '0', ageHours: 0,
+    asset: { code: 'usdterc20', ticker: 'USDT', name: 'Tether', network: 'Ethereum', extraIdRequired: false },
+    payment: { address: '0xfixture0000000000000000000000000000000', amount: '0.001', currency: 'usdterc20', memo: 'fixture', qrDataUrl: 'data:image/png;base64,AA==', expiresAt: null },
+    ...overrides,
   });
-  readyAssets(ui);
+}
+
+test('partial payments display the exact coin shortfall without usable send instructions', async () => {
+  const { ui, element, navigator } = customerUi();
+  const order = cryptoOrder();
+  ui.state.token = order.token;
+  ui.state.order = order;
   ui.renderOrder();
-  const shortfall = ui.partialRemainder(ui.state.order);
-  // Compare fields: the object comes from the VM realm with a different prototype.
-  assert.equal(shortfall.remaining, '0.0006');
-  assert.equal(shortfall.currency, 'usdt');
-  const presentation = ui.statusPresentation(ui.state.order);
-  assert.equal(presentation.title, 'Partial payment received');
-  assert.match(presentation.description, /We received 0\.0004 USDT of 0\.001 USDT/);
-  assert.match(presentation.description, /Send the remaining 0\.0006 USDT to the same payment address below/);
-  assert.match(presentation.description, /Don’t send the full amount again/);
-  assert.equal(presentation.tone, 'pending', 'a live window makes the top-up self-service');
-  assert.equal(element('receiptReceivedRow').hidden, false);
+  assert.equal(element('paymentQrWrap').hidden, false);
+  element('copyFallback').dataset.field = 'address';
+  element('copyFallbackValue').value = order.payment.address;
+  ui.state.order = { ...order, status: 'partially_paid', actuallyPaid: '0.0004' };
+  ui.renderOrder();
+  assert.match(element('paymentDescription').textContent, /Don’t send more yet/);
+  assert.equal(element('receiptExpected').textContent, '0.001 USDT');
   assert.equal(element('receiptReceived').textContent, '0.0004 USDT');
-  assert.equal(element('paymentAmountLabel').textContent, 'Send the remaining amount');
-  assert.equal(element('paymentAmount').textContent, '0.0006');
-  assert.equal(element('paymentTicker').textContent, 'usdt');
-  assert.equal(element('paymentQrWrap').hidden, true, 'the stored QR encodes the full original amount');
-  assert.equal(element('paymentAddress').value, '0xfixture0000000000000000000000000000000');
+  assert.equal(element('receiptShortfall').textContent, '0.0006 USDT');
+  assert.equal(element('receiptAsset').textContent, 'USDT · Ethereum');
+  assert.equal(element('cryptoPayment').hidden, true);
   assert.equal(element('paymentQrWrap').hidden, true);
-  assert.match(element('networkCaution').textContent, /Send only USDT on Ethereum/);
-  // Exact decimal math without floating-point drift.
-  assert.equal(ui.subtractDecimals('0.001', '0.0004'), '0.0006');
-  assert.equal(ui.subtractDecimals('100', '40'), '60');
-  // Over-funding or a missing received amount is left to the merchant.
-  assert.equal(ui.partialRemainder({ method: 'crypto', amount: '100.00', actuallyPaid: '150.00', payment: { amount: '0.001', currency: 'btc' } }), null);
-  assert.equal(ui.partialRemainder({ method: 'crypto', amount: '100.00', payment: { amount: '0.001', currency: 'btc' } }), null);
-  assert.equal(ui.partialRemainder({ method: 'card', amount: '100.00', actuallyPaid: '150.00' }), null);
-  assert.equal(ui.partialRemainder({ method: 'card', amount: '100.00' }), null);
-  const overfunded = cardOrder({
-    status: 'partially_paid', terminal: false, method: 'crypto', actuallyPaid: '0.002',
-    payment: { address: '0xfixture0000000000000000000000000000000', amount: '0.001', currency: 'usdt', memo: null, qrDataUrl: null, expiresAt: null },
-  });
-  ui.state.order = overfunded;
-  ui.renderOrder();
-  assert.equal(element('receiptReceivedRow').hidden, false);
-  assert.equal(element('receiptReceived').textContent, '0.002 USDT');
-  // Over-funded crypto is honestly pending: the provider will settle the excess payment.
-  assert.match(ui.statusPresentation(overfunded).description, /We received 0.002 USDT of 0.001 USDT/);
-  assert.match(ui.statusPresentation(overfunded).description, /Don’t send the full amount again/);
+  assert.equal(element('paymentAddress').value, '');
+  assert.equal(element('paymentMemo').value, '');
+  assert.equal(element('copyFallbackValue').value, '');
+  const clipboard = [];
+  navigator.clipboard = { writeText: async text => clipboard.push(text) };
+  await ui.copyPayment({ dataset: { copy: 'address' } });
+  const button = element('copyOrderButton');
+  button.dataset.copy = 'order';
+  await ui.copyPayment(button);
+  assert.deepEqual(clipboard, [order.orderId]);
 });
 
-test('crypto partial payments with an ended window defer to the merchant; card shortfalls stay fiat', () => {
-  const { ui, element } = customerUi();
-  const ended = cardOrder({
-    status: 'partially_paid', terminal: false, method: 'crypto',
-    asset: { code: 'usdt', ticker: 'USDT', name: 'Tether', network: 'Ethereum', extraIdRequired: false },
-    actuallyPaid: '0.0004',
-    payment: { address: '0xfixture0000000000000000000000000000000', amount: '0.001', currency: 'usdt', memo: null, qrDataUrl: null, expiresAt: new Date(Date.now() - 60000).toISOString() },
-  });
-  ui.state.order = ended;
+test('partial amounts remain informational when expired, offline, missing, or inconsistent', () => {
+  const { ui, element, navigator } = customerUi();
+  const order = cryptoOrder({ status: 'partially_paid', actuallyPaid: '0.0004' });
+  order.payment.expiresAt = new Date(Date.now() - 60000).toISOString();
+  ui.state.order = order;
+  ui.state.token = order.token;
   ui.renderOrder();
-  const presentation = ui.statusPresentation(ended);
-  assert.match(presentation.description, /The payment window has ended/);
-  assert.match(presentation.description, /contact the merchant with your order reference/);
-  assert.equal(presentation.tone, 'problem');
-  assert.equal(element('paymentAmountLabel').textContent, 'Original requested amount');
-
-  const { ui: cardUi, element: cardElement } = customerUi();
-  cardUi.state.order = cardOrder({
-    status: 'partially_paid', terminal: false, method: 'card', actuallyPaid: '40.00',
-  });
-  cardUi.renderOrder();
-  const cardPresentation = cardUi.statusPresentation(cardUi.state.order);
-  assert.match(cardPresentation.description, /We received \$40\.00 USD of \$100\.00 USD/);
-  assert.match(cardPresentation.description, /The remaining amount is \$60\.00 USD/);
-  assert.equal(cardElement('receiptReceivedRow').hidden, false);
-  assert.equal(cardElement('receiptReceived').textContent, '\$40.00 USD');
+  assert.match(element('paymentDescription').textContent, /The payment window has ended/);
+  navigator.onLine = false;
+  ui.handleOffline();
+  assert.match(element('paymentDescription').textContent, /last reported amounts/);
+  assert.equal(element('receiptExpected').textContent, '0.001 USDT');
+  assert.equal(element('cryptoPayment').hidden, true);
+  for (const amount of [null, '0', '0.001', '0.002']) {
+    ui.state.order = { ...order, actuallyPaid: amount };
+    ui.renderOrder();
+    assert.equal(element('receiptShortfallRow').hidden, true);
+    assert.notEqual(element('paymentTitle').textContent, 'Payment received');
+  }
+  ui.state.order = { ...order, payment: { ...order.payment, currency: 'usdttrc20' } };
+  ui.renderOrder();
+  assert.equal(element('receiptReceivedRow').hidden, true, 'mismatched network code cannot be labeled as the selected coin');
+  ui.state.order = cardOrder({ status: 'partially_paid', terminal: false, actuallyPaid: '40.00' });
+  ui.renderOrder();
+  assert.equal(element('cardPayment').hidden, true);
+  assert.equal(element('receiptAmount').textContent, '$100.00 USD');
+  assert.equal(element('receiptReceived').textContent, '$40.00 USD');
+  assert.equal(element('receiptShortfall').textContent, '$60.00 USD');
 });
 
-'use strict';
+function selectActive(ui, order) {
+  ui.state.saved = { token: order.token, timestamp: Date.now() };
+  ui.adoptOrder(order);
+}
 
-
-test("a fresh crypto payment dismisses only after confirming nothing was sent", () => {
-  const { ui, element } = customerUi();
-  ui.state.saved = { token: "tok_fresh", timestamp: Date.now() };
-  ui.state.token = "tok_fresh";
-  ui.state.order = cardOrder({
-    status: "waiting", terminal: false, method: "crypto", ageHours: 2,
-    asset: { code: "usdt", ticker: "USDT", name: "Tether", network: "Ethereum", extraIdRequired: false },
-    payment: { address: "0xfixture0000000000000000000000000000000", amount: "100.00", currency: "usdt", memo: null, qrDataUrl: null, expiresAt: null },
-  });
-  readyAssets(ui);
-  ui.renderOrder();
-  assert.equal(ui.needsDismissConfirmation(ui.state.order), true);
-  assert.equal(ui.canDismissOrder(ui.state.order), true);
-  ui.renderResume();
-  assert.equal(element("dismissNoticeButton").hidden, true, "the banner cannot bypass the confirmation");
-  assert.equal(element("dismissConfirmWrap").hidden, false);
-  assert.equal(element("dismissPaymentButton").disabled, true, "disabled until the confirmation is ticked");
-  assert.match(ui.statusPresentation(ui.state.order).description, /Made a mistake\? You can dismiss this payment below/);
-  element("dismissConfirm").checked = true;
-  ui.dismissPayment();
-  assert.equal(ui.state.token, null);
+test('start over keeps checkout blocked until an acknowledgement and then applies the pending preset', async () => {
+  const order = cryptoOrder({ canAbandon: true });
+  const acknowledged = { ...order, canAbandon: false, abandonedAt: new Date().toISOString() };
+  const calls = [];
+  const response = Promise.withResolvers();
+  const { ui, element } = customerUi({}, { fetch: async (path, options) => { calls.push({ path, options }); return response.promise; } });
+  selectActive(ui, order);
+  ui.state.presetSearch = '?amount=125.50&currency=eur';
+  ui.applyPresetLink();
+  assert.equal(element('dismissNoticeButton').hidden, true);
+  assert.equal(element('dismissConfirmWrap').hidden, false, 'an explicit zero can qualify');
+  await ui.dismissPayment();
+  assert.equal(calls.length, 0, 'no confirmation');
+  ui.state.confirmedToken = order.token;
+  element('dismissConfirm').checked = true;
+  const finishing = ui.dismissPayment();
+  assert.equal(calls[0].path, '/api/abandon');
+  assert.deepEqual(JSON.parse(calls[0].options.body), { token: order.token, confirmed: true });
+  assert.equal(ui.canCreateCheckout(), false);
+  assert.equal(ui.state.presetPending?.amount, '125.50');
+  await ui.dismissPayment();
+  assert.equal(calls.length, 1, 'no duplicate release while busy');
+  response.resolve({ ok: true, json: async () => acknowledged });
+  await finishing;
+  assert.equal(ui.canCreateCheckout(), true);
   assert.equal(ui.state.saved, null);
-  assert.equal(element("resumeNotice").hidden, true);
-  assert.equal(element("continueButton").disabled, false);
+  assert.equal(element('amountInput').value, '125.50');
+  assert.equal(ui.state.previousPayment.token, order.token);
+  assert.equal(element('previousPaymentNotice').hidden, false);
 });
 
-test("a stale crypto payment needs no confirmation and dismisses immediately", () => {
+test('a lost acknowledgement leaves checkout locked until status returns the release', async () => {
+  const order = cryptoOrder({ canAbandon: true });
+  const released = { ...order, canAbandon: false, abandonedAt: new Date().toISOString() };
+  const { ui, element } = customerUi({}, { fetch: async path => {
+    if (path === '/api/abandon') throw new Error('Lost response');
+    return { ok: true, json: async () => released };
+  } });
+  selectActive(ui, order);
+  ui.state.confirmedToken = order.token;
+  element('dismissConfirm').checked = true;
+  await ui.dismissPayment();
+  assert.equal(ui.canCreateCheckout(), false);
+  assert.equal(ui.state.saved.token, order.token);
+  assert.match(element('dismissPaymentError').textContent, /Couldn’t confirm/);
+  await ui.checkStatus(true);
+  assert.equal(ui.canCreateCheckout(), true);
+  assert.equal(ui.state.viewingHistory, true);
+  assert.equal(ui.state.previousPayment.token, order.token);
+  assert.equal(element('cryptoPayment').hidden, true);
+});
+
+test('reading a previous order never republishes it over a replacement from another tab', () => {
+  for (const replacementFirst of [true, false]) {
+    const { ui, element, localStorage } = customerUi();
+    const old = cryptoOrder({ canAbandon: true });
+    const next = cryptoOrder({ token: 'tok_replacement', orderId: 'err_replacement' });
+    const save = token => localStorage.setItem('pay_page.resume.v1', JSON.stringify({ token, timestamp: Date.now() }));
+    selectActive(ui, old);
+    save(old.token);
+    const recordReplacement = () => { save(next.token); ui.syncPaymentStorage('pay_page.resume.v1'); };
+    if (replacementFirst) recordReplacement();
+    localStorage.setItem('pay_page.dismissed.v1', JSON.stringify([old.token]));
+    ui.syncPaymentStorage('pay_page.dismissed.v1');
+    if (!replacementFirst) recordReplacement();
+    ui.adoptOrder({ ...old, abandonedAt: new Date().toISOString() });
+    assert.equal(ui.activePaymentToken(), next.token);
+    assert.equal(ui.readSavedPayment().token, next.token);
+    assert.equal(ui.state.viewingHistory, true);
+    assert.equal(element('cryptoPayment').hidden, true);
+    assert.equal(ui.canCreateCheckout(), false);
+  }
+});
+
+test('a stale provider response cannot reopen the address or QR after reconnecting', async () => {
+  const order = cryptoOrder({ canAbandon: true });
+  const { ui, element, navigator } = customerUi({}, { fetch: async () => ({ ok: true, json: async () => ({ ...order, statusStale: true }) }) });
+  selectActive(ui, order);
+  assert.equal(element('cryptoPayment').hidden, false);
+  navigator.onLine = false;
+  ui.handleOffline();
+  assert.equal(element('cryptoPayment').hidden, true);
+  navigator.onLine = true;
+  assert.equal(await ui.checkStatus(true), false);
+  assert.equal(element('cryptoPayment').hidden, true);
+  assert.equal(element('paymentQrWrap').hidden, true);
+  assert.equal(ui.canCreateCheckout(), false);
+});
+
+test('older payments with funds cannot be dismissed based on age', () => {
   const { ui, element } = customerUi();
-  ui.state.order = cardOrder({
-    status: "waiting", terminal: false, method: "crypto", ageHours: 25,
-    asset: { code: "usdt", ticker: "USDT", name: "Tether", network: "Ethereum", extraIdRequired: false },
-    payment: { address: "0xfixture0000000000000000000000000000000", amount: "100.00", currency: "usdt", memo: null, qrDataUrl: null, expiresAt: null },
-  });
-  readyAssets(ui);
-  ui.renderOrder();
-  assert.equal(ui.needsDismissConfirmation(ui.state.order), false);
-  assert.equal(element("dismissConfirmWrap").hidden, true);
-  assert.equal(element("dismissNoticeButton").hidden, false);
-  ui.dismissPayment();
-  assert.equal(ui.state.token, null);
-  assert.equal(element("continueButton").disabled, false);
+  selectActive(ui, cryptoOrder({ status: 'partially_paid', actuallyPaid: '0.0004', ageHours: 36 }));
+  assert.equal(element('stalePaymentActions').hidden, true);
+  assert.equal(element('dismissNoticeButton').hidden, true);
+  assert.equal(ui.canCreateCheckout(), false);
 });

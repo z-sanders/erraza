@@ -76,6 +76,8 @@
           </div>
         </div>
 
+        <p class="field-note" id="previousPaymentNotice" hidden><button class="text-button" id="previousPaymentButton" type="button">Check the payment you left</button></p>
+
         <div class="resume-notice" id="presetNotice" role="status" hidden>
           <div>
             <p class="notice-title" id="presetNoticeTitle"></p>
@@ -275,7 +277,9 @@
     <dl class="receipt" id="paymentReceipt" hidden>
       <div><dt>Order reference</dt><dd class="receipt-order"><span id="receiptOrder"></span><button class="copy-button" id="copyOrderButton" type="button" data-copy="order" aria-label="Copy order reference" disabled><span class="icon icon-copy" aria-hidden="true"></span><span class="copy-label">Copy</span></button></dd></div>
       <div><dt>Payment amount</dt><dd id="receiptAmount"></dd></div>
-      <div id="receiptReceivedRow" hidden><dt>Received so far</dt><dd id="receiptReceived"></dd></div>
+      <div id="receiptExpectedRow" hidden><dt>Originally requested</dt><dd id="receiptExpected"></dd></div>
+      <div id="receiptReceivedRow" hidden><dt>Reported received</dt><dd id="receiptReceived"></dd></div>
+      <div id="receiptShortfallRow" hidden><dt>Reported shortfall</dt><dd id="receiptShortfall"></dd></div>
       <div><dt>Payment to</dt><dd id="receiptMerchant"></dd></div>
       <div id="receiptReferenceRow" hidden><dt>For</dt><dd id="receiptReference"></dd></div>
       <div><dt>Payment method</dt><dd id="receiptMethod"></dd></div>
@@ -291,7 +295,12 @@
     </div>
     <p class="storage-note" id="storageNote" hidden>Your browser could not save the return link. Keep this page open and keep your order reference for the merchant.</p>
     <div class="missing-payment-actions" id="missingPaymentActions" hidden><button class="text-button" id="forgetPaymentButton" type="button">Remove saved link</button><p>This only removes the link from this browser. It does not cancel a payment.</p></div>
-    <div class="missing-payment-actions" id="stalePaymentActions" hidden><label class="card-guide-check" for="dismissConfirm" id="dismissConfirmWrap" hidden><input type="checkbox" id="dismissConfirm" /><span>I have not sent and will not send funds to this payment address.</span></label><button class="text-button" id="dismissPaymentButton" type="button">Dismiss this payment</button><p>Dismiss only removes this payment from this browser, so you can start a new one. It does not cancel the payment. If you sent funds, contact the merchant before paying again.</p></div>
+    <div class="missing-payment-actions" id="stalePaymentActions" hidden>
+      <label class="card-guide-check" for="dismissConfirm" id="dismissConfirmWrap" hidden><input type="checkbox" id="dismissConfirm" /><span>I have not sent and will not send funds to this payment address.</span></label>
+      <p id="dismissPaymentNote">Removing the saved link does not cancel the provider’s payment.</p>
+      <button class="text-button" id="dismissPaymentButton" type="button" aria-describedby="dismissPaymentNote">Remove saved link</button>
+      <p class="field-error" id="dismissPaymentError" role="alert" hidden></p>
+    </div>
     <p class="dialog-footnote">Closing this window does not cancel your payment.</p>
     <button class="text-button dialog-help" id="paymentHelpButton" type="button" aria-haspopup="dialog" aria-controls="helpDialog">Need help with this payment?</button>
   </dialog>

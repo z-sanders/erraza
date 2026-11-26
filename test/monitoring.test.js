@@ -245,7 +245,7 @@ test('abandoned creations expire past their TTL; anything reconcilable never exp
   const expired = expireAbandonedCreation(abandoned, 3600, NOW);
   assert.equal(expired.status, 'expired');
   assert.equal(expired.complete, false);
-  assert.match(expired.message, /No payment was taken/);
+  assert.match(expired.message, /was never confirmed/);
   // Young orders keep waiting.
   assert.equal(expireAbandonedCreation({ ...abandoned, createdAt: fresh }, 3600, NOW).status, 'unknown');
   // Any provider identity or surfaced payment details block expiry.
@@ -336,7 +336,7 @@ test('status endpoint retires an abandoned creation and answers with a terminal 
   assert.equal(response.body.status, 'expired');
   assert.equal(response.body.terminal, true);
   assert.equal(response.body.complete, false);
-  assert.match(response.body.message, /No payment was taken/);
+  assert.match(response.body.message, /was never confirmed/);
   assert.equal(store.orders.get(abandoned.id).status, 'expired');
   // A young unresolved creation is left alone.
   const young = { ...abandoned, id: 'err_33333333-4444-4333-8333-555555555555', createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() };

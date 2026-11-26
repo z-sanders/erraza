@@ -4,8 +4,8 @@
   const STORAGE_KEY = 'pay_page.resume.v1';
   const ATTEMPT_KEY = 'pay_page.pending-attempt.v1';
   const DISMISS_KEY = 'pay_page.dismissed.v1';
+  const PREVIOUS_KEY = 'pay_page.released.v1';
   const GUIDE_KEY = 'pay_page.card-guide.v1';
-  const DISMISS_INTERVAL = 24 * 60 * 60 * 1000;
   const GUIDE_MAX_AGE = 24 * 60 * 60 * 1000;
   const GUIDE_QUOTE_AGE = 2 * 60 * 1000;
   const GUIDE_PROVIDER_URL = 'https://www.moonpay.com/buy';
@@ -29,12 +29,12 @@
     'paymentTicker', 'paymentNetwork', 'paymentQrWrap', 'paymentQr', 'paymentAddress', 'paymentMemoWrap', 'paymentMemo',
     'networkCaution', 'paymentExpiry', 'paymentExpiryValue', 'cardPayment', 'externalCheckout', 'cardDestinationNote',
     'paymentReceipt', 'receiptOrder', 'copyOrderButton', 'receiptAmount', 'receiptMerchant', 'receiptReferenceRow', 'receiptReference', 'receiptMethod', 'receiptAssetRow', 'receiptAsset',
-    'receiptReceivedRow', 'receiptReceived',
+    'receiptExpectedRow', 'receiptExpected', 'receiptReceivedRow', 'receiptReceived', 'receiptShortfallRow', 'receiptShortfall',
     'receiptField', 'payerEmailInput', 'receiptConsent', 'payerEmailError',
     'receiptCreatedRow', 'receiptCreated', 'copyFallback', 'copyFallbackValue', 'copyFeedback', 'statusCheckMessage',
     'checkStatusButton', 'checkStatusLabel', 'storageNote', 'missingPaymentActions', 'forgetPaymentButton',
     'stalePaymentActions', 'dismissPaymentButton', 'statusGuideSection', 'statusGuideButton',
-    'dismissConfirmWrap', 'dismissConfirm',
+    'dismissConfirmWrap', 'dismissConfirm', 'dismissPaymentNote', 'dismissPaymentError', 'previousPaymentNotice', 'previousPaymentButton',
     'paymentHelpButton', 'helpDialog', 'helpTitle', 'privacyDialog', 'privacyTitle', 'supportEmail', 'announcer',
     'cryptoGuideButton', 'fiatGuideButton', 'helpGuideButton', 'helpGuideBlocked', 'cardRecovery', 'rejectedCardGuideButton',
     'cardGuideNotice', 'cardGuideNoticeText', 'resumeGuideButton', 'cancelGuideButton', 'cardGuideDialog', 'cardGuideTitle',
@@ -75,8 +75,13 @@
     unreadableAttempt: false,
     sessionExpired: false,
     saved: null,
+    previousPayment: null,
+    viewingHistory: false,
+    abandonBusy: false,
+    confirmedToken: null,
     token: null,
     order: null,
+    paymentDetailsStale: false,
     storageFailed: false,
     lookupMissing: false,
     unverifiableChecks: 0,
@@ -140,7 +145,11 @@
         const message = typeof data?.message === 'string' && data.message.trim()
           ? data.message.slice(0, 1200)
           : 'The payment service could not complete this request.';
-        throw new ApiError(message, response.status);
+        const error = new ApiError(message, response.status);
+        if (response.status === 409 && data?.error === 'payment_in_progress' && validToken(data.activeToken)) {
+          error.activeToken = data.activeToken;
+        }
+        throw error;
       }
       return data;
     } catch (error) {
@@ -681,29 +690,18 @@
     return order.complete === true || (order.terminal === true && FINAL_PROBLEMS.has(order.status));
   }
 
-  // The shortfall on a partially_paid order, or null when it cannot be computed
-  // honestly (missing or over-funding amounts are left to the merchant).
-  // Units differ by rail: crypto shortfalls are in coin units (payCurrency),
-  // card on-ramp shortfalls are fiat.
-  function partialRemainder(order) {
-    const received = order?.actuallyPaid;
-    if (!received) return null;
-    if (order.method === 'crypto') {
-      const expected = order.payment?.amount;
-      const currency = order.payment?.currency;
-      if (!expected || !currency || compareDecimals(received, expected) !== -1) return null;
-      return { remaining: subtractDecimals(expected, received), currency };
-    }
-    if (order.method === 'card' && order.currency && compareDecimals(received, order.amount) === -1) {
-      return { remaining: subtractDecimals(order.amount, received), currency: order.currency };
-    }
-    return null;
-  }
-
-  function partialReceivedLabel(order) {
-    if (!order?.actuallyPaid) return null;
-    const currency = order.method === 'crypto' ? order.payment?.currency : order.currency;
-    return currency ? formatMoney(order.actuallyPaid, currency) : null;
+  // A crypto deposit and its expected amount must be denominated in the same coin.
+  function partialAmounts(order) {
+    const crypto = order.method === 'crypto';
+    if (crypto && (!order.asset || order.payment?.currency !== order.asset.code)) return {};
+    const currency = crypto ? order.asset.ticker : order.currency;
+    const price = crypto ? order.payment?.amount : order.amount;
+    const paid = order.actuallyPaid;
+    const expected = compareDecimals(price, '0') === 1 ? formatMoney(price, currency) : '';
+    const received = decimalParts(paid) ? formatMoney(paid, currency) : '';
+    const shortfall = expected && compareDecimals(paid, '0') === 1 && compareDecimals(paid, price) === -1
+      ? formatMoney(subtractDecimals(price, paid), currency) : '';
+    return { expected, received, shortfall };
   }
 
   // Card orders the buying guide may treat as a dead end: a terminal problem, a
@@ -712,11 +710,6 @@
   // confirmation stays mandatory for all of them.
   const STALE_GUIDE_STATUSES = ['review', 'under_review', 'unknown', 'uncertain'];
 
-  function stalePayment(order) {
-    const created = Date.parse(order?.createdAt || '');
-    return Number.isFinite(created) && Date.now() - created >= DISMISS_INTERVAL;
-  }
-
   function validGuideCardSource(order) {
     if (order?.method !== 'card' || order.complete) return false;
     if (order.terminal && ['failed', 'expired', 'refunded'].includes(order.status)) return true;
@@ -724,26 +717,20 @@
     return STALE_GUIDE_STATUSES.includes(order.status);
   }
 
-  // A fresh payment whose address or checkout link is still live could receive
-  // funds at any moment, so dismissing it requires the payer's explicit
-  // confirmation instead of the stale-payment shortcut.
+  function activePaymentToken() {
+    return state.saved?.token || (!state.viewingHistory ? state.token : null);
+  }
+
   function needsDismissConfirmation(order) {
-    if (!order || order.complete || order.actuallyPaid || stalePayment(order)) return false;
-    if (settledOrder(order) || order.status === 'rejected') return false;
-    return Boolean(order.payment?.address) || Boolean(order.checkoutUrl);
+    return Boolean(order?.canAbandon && !order.abandonedAt && !order.complete);
   }
 
   function canDismissOrder(order) {
-    if (!order || order.complete) return false;
-    if (order.method === 'card' && order.status === 'unknown' && !order.checkoutUrl) return true;
-    if (needsDismissConfirmation(order)) return true;
-    return order.status === 'rejected' || settledOrder(order) || stalePayment(order);
+    return Boolean(order && !order.abandonedAt && !order.complete && (needsDismissConfirmation(order) || settledOrder(order)));
   }
 
   function canDismissSaved() {
-    if (state.order) return canDismissOrder(state.order);
-    const saved = state.saved;
-    return Boolean(saved?.token && Date.now() - saved.timestamp >= DISMISS_INTERVAL);
+    return Boolean(state.order?.token === activePaymentToken() && canDismissOrder(state.order));
   }
 
   function dismissedTokens() {
@@ -767,53 +754,116 @@
     return state.lookupMissing || state.unverifiableChecks >= 3;
   }
 
-  function dropDismissedLocalPayment() {
-    // Clears the current payment reference when it is on the dismissed list, and
-    // returns the link preset that auto-applied as a result (or null).
-    const dismissed = dismissedTokens();
-    if (!((state.saved?.token && dismissed.includes(state.saved.token))
-      || (state.token && dismissed.includes(state.token)))) return null;
-    stopPollingRequest();
-    window.clearTimeout(state.expiryTimer);
-    state.token = null;
-    state.order = null;
-    state.saved = null;
-    state.lookupMissing = false;
-    state.unverifiableChecks = 0;
-    state.pollStopped = true;
-    state.idempotencyKey = null;
+  function clearLocalPayment(token) {
+    const active = activePaymentToken() === token;
+    const displayed = state.token === token && !state.viewingHistory;
+    if (!token || (!active && !displayed)) return null;
+    if (state.saved?.token === token || !state.saved) {
+      const stored = readSavedPayment();
+      state.saved = stored?.token === token ? null : stored;
+    }
+    if (displayed) {
+      stopPollingRequest();
+      window.clearTimeout(state.expiryTimer);
+      state.token = null;
+      state.order = null;
+      state.lookupMissing = false;
+      state.unverifiableChecks = 0;
+      state.pollStopped = true;
+      if (el.paymentDialog.open) el.paymentDialog.close();
+    }
+    if (!state.checkoutBusy && !state.recoveryRequest) state.idempotencyKey = null;
     state.rejectedRetryApproved = false;
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* The dismissing tab already cleared it. */ }
-    if (el.paymentDialog.open) el.paymentDialog.close();
+    resetDismissConfirmation();
     renderResume();
     renderContinue();
     return maybeApplyPendingPreset();
   }
 
-  function dismissPayment() {
-    const token = state.token || state.saved?.token;
-    // An in-flight checkout still adopts its response afterwards; dismissing now
-    // would be silently undone, so wait for the checkout to settle first.
-    if (!token || state.checkoutBusy
-      || (state.order ? !canDismissOrder(state.order) : !canDismissSaved())) return;
-    if (needsDismissConfirmation(state.order) && !el.dismissConfirm.checked) return;
-    rememberDismissedToken(token);
-    const applied = dropDismissedLocalPayment();
-    const message = 'This payment was dismissed in this browser, so you can start a new one. Dismissing did not cancel it. If you sent funds, contact the merchant before paying again.';
-    showCheckoutError(message);
-    announce(applied ? `The payment link amount ${formatMoney(applied.amount, applied.currency)} was applied.` : message);
+  function dropDismissedLocalPayment(token = activePaymentToken()) {
+    if (!token || !dismissedTokens().includes(token)) return null;
+    return clearLocalPayment(token);
+  }
+
+  function showDismissError(message = '') {
+    el.dismissPaymentError.textContent = message;
+    el.dismissPaymentError.hidden = !message;
+  }
+
+  function resetDismissConfirmation() {
+    state.confirmedToken = null;
+    el.dismissConfirm.checked = false;
+    showDismissError();
+  }
+
+  function renderDismissControl(order) {
+    const active = !state.viewingHistory && activePaymentToken() === order.token;
+    const confirmNeeded = active && needsDismissConfirmation(order);
+    if (!confirmNeeded && state.confirmedToken) resetDismissConfirmation();
+    el.stalePaymentActions.hidden = !active || referenceUnresolvable() || !canDismissOrder(order);
+    el.dismissConfirmWrap.hidden = !confirmNeeded;
+    el.dismissConfirm.disabled = state.abandonBusy || state.checkoutBusy;
+    el.dismissPaymentButton.disabled = state.abandonBusy || state.checkoutBusy
+      || (confirmNeeded && (!el.dismissConfirm.checked || state.confirmedToken !== order.token || !paymentsReady()));
+    el.dismissPaymentButton.textContent = state.abandonBusy ? 'Checking with provider…' : confirmNeeded ? 'Start over' : 'Remove saved link';
+    el.dismissPaymentNote.textContent = confirmNeeded
+      ? 'This does not cancel the old payment. Don’t use its address. You can still check its status after you start over.'
+      : 'Removing the saved link does not cancel the provider’s payment.';
+  }
+
+  async function dismissPayment() {
+    const token = activePaymentToken();
+    const order = state.order;
+    if (!token || order?.token !== token || !canDismissSaved() || state.viewingHistory || state.checkoutBusy || state.abandonBusy) return;
+    if (!needsDismissConfirmation(order)) {
+      rememberDismissedToken(token);
+      const applied = clearLocalPayment(token);
+      const message = 'Saved link removed. This did not cancel a payment.';
+      showCheckoutError(message);
+      if (applied) announcePendingPreset(applied);
+      else announce(message);
+      return;
+    }
+    if (state.confirmedToken !== token || !el.dismissConfirm.checked || !paymentsReady()) return;
+    state.abandonBusy = true;
+    stopPollingRequest();
+    showDismissError();
+    renderDismissControl(order);
+    renderContinue();
+    try {
+      const response = await request('/api/abandon', {
+        method: 'POST', body: { token, confirmed: true },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.config.csrfToken },
+      });
+      const released = normalizeOrder(response, token);
+      if (!released.abandonedAt || released.orderId !== order.orderId) throw new Error('Unconfirmed release');
+      rememberReleasedPayment(released);
+      const applied = clearLocalPayment(token);
+      const message = 'Checkout released. The old payment was not canceled. Don’t use its address.';
+      showCheckoutError(message);
+      if (applied) announcePendingPreset(applied);
+      else announce(message);
+    } catch (error) {
+      if (state.token === token && !state.viewingHistory) {
+        resetDismissConfirmation();
+        showDismissError(error instanceof ApiError && error.status ? error.message : 'Couldn’t confirm that the checkout was released. Check its status before starting over.');
+        schedulePoll();
+      }
+    } finally {
+      state.abandonBusy = false;
+      if (state.order) renderDismissControl(state.order);
+      renderResume();
+      renderContinue();
+    }
   }
 
   function hasUnresolvedPayment() {
-    if (state.saved?.token && state.saved.token !== state.token) return true;
-    if (state.token && state.order?.token !== state.token) return true;
-    if (state.rejectedRetryApproved && state.order?.method === 'card'
-      && ['failed', 'expired', 'refunded'].includes(state.order.status) && settledOrder(state.order)) return false;
-    return Boolean((state.token || state.saved?.token) && !settledOrder(state.order));
+    const token = activePaymentToken();
+    return Boolean(token && (state.order?.token !== token || (!state.order.abandonedAt && !settledOrder(state.order))));
   }
 
   function canCreateCheckout() {
-    if (!paymentsReady() || state.checkoutBusy || state.guide || hasUnresolvedPayment() || state.unreadableAttempt) return false;
+    if (!paymentsReady() || state.checkoutBusy || state.abandonBusy || state.guide || hasUnresolvedPayment() || state.unreadableAttempt) return false;
     if (state.recoveryRequest) return true;
     if (!amountValidation().value) return false;
     if (state.method === 'card') return cardAvailable();
@@ -936,7 +986,7 @@
   }
 
   function renderHeading() {
-    const reference = state.order?.reference ?? state.reference;
+    const reference = (!state.viewingHistory ? state.order?.reference : null) ?? state.reference;
     el.checkoutTitle.textContent = reference ? `Payment for ${reference}` : 'Payment details';
   }
 
@@ -1264,22 +1314,23 @@
     applyPreset(preset);
     renderAmount();
     renderResume();
+    queueQuote(0);
     renderContinue();
     return preset;
   }
 
   function applyPresetFromLink() {
     const preset = state.presetPending;
-    if (!preset || (hasUnresolvedPayment() && !canDismissSaved())) return;
+    if (!preset || state.checkoutBusy || state.abandonBusy) return;
     if (hasUnresolvedPayment()) {
-      // The dismissal path re-applies the pending preset once the reference is cleared.
-      dismissPayment();
+      resumePayment(activePaymentToken());
       return;
     }
     state.presetPending = null;
     applyPreset(preset);
     renderAmount();
     renderResume();
+    queueQuote(0);
     renderContinue();
     announcePendingPreset(preset);
   }
@@ -1457,13 +1508,21 @@
       state.recoveryRequest = null;
       clearAttempt();
       state.returnMessage = '';
+      state.viewingHistory = Boolean(order.abandonedAt) || !rememberPayment(order.token);
       adoptOrder(order);
       openDialog(el.paymentDialog, el.paymentTitle);
       startExpiryClock();
       if (!order.terminal && !order.complete) schedulePoll(POLL_INTERVAL);
     } catch (error) {
       const uncertain = !(error instanceof ApiError) || error.status === 0 || error.status >= 500 || (error.status >= 200 && error.status < 300);
-      if (uncertain) {
+      if (error instanceof ApiError && error.activeToken) {
+        state.recoveryRequest = null;
+        state.idempotencyKey = null;
+        clearAttempt();
+        rememberPayment(error.activeToken, true);
+        showCheckoutError(error.message);
+        resumePayment(error.activeToken);
+      } else if (uncertain) {
         state.recoveryRequest = body;
         showCheckoutError('We couldn’t retrieve the checkout result. Recover it with the same details below; don’t start a separate payment. Keep this page open while you recover it.');
       } else if (error.status === 401 || error.status === 403) {
@@ -1513,6 +1572,9 @@
       status: data.status.toLowerCase(),
       terminal: data.terminal,
       complete: data.complete,
+      abandonedAt: typeof data.abandonedAt === 'string' && Number.isFinite(Date.parse(data.abandonedAt)) ? data.abandonedAt : null,
+      canAbandon: data.canAbandon === true,
+      statusStale: data.statusStale === true,
       actuallyPaid: decimalParts(data.actuallyPaid) && compareDecimals(data.actuallyPaid, '0') !== -1
         ? data.actuallyPaid : null,
       createdAt: typeof data.createdAt === 'string' ? data.createdAt : null,
@@ -1523,6 +1585,14 @@
   }
 
   function statusPresentation(order) {
+    if (order.abandonedAt) {
+      const received = order.complete || compareDecimals(order.actuallyPaid, '0') === 1 || order.status === 'partially_paid';
+      return {
+        label: 'Previous checkout', title: received ? 'Funds reported on the earlier payment' : 'You left this checkout',
+        description: 'The original payment was not canceled. Don’t use its old address. If you sent funds, check this status and give the merchant its order reference before paying again.',
+        tone: received || order.status === 'review' ? 'problem' : 'pending', icon: 'info',
+      };
+    }
     // Only this explicit server boolean can render a successful payment.
     if (order.complete === true) {
       return { label: 'Complete', title: 'Payment received', description: 'The payment provider has confirmed that your payment is complete. Keep the order reference below.', tone: 'complete', icon: 'check' };
@@ -1542,12 +1612,19 @@
       cancel: ['Cancelled', 'Payment cancelled', 'The provider marked this payment as cancelled. If you sent funds or see a charge, contact the merchant with your order reference.'],
       creating: ['Preparing payment', 'Preparing your payment', 'The provider is preparing the checkout details. Keep this payment reference; you don’t need to create another payment.'],
       processing: ['Processing', 'Your payment is processing', 'The provider is still processing this payment. Keep your order reference and check here for updates.'],
-      unknown: ['Status unverified', 'We’re checking your payment', 'The provider has not returned a verified outcome. Don’t start a separate payment yet. Keep your order reference and check again. If it stays unresolved, you can dismiss this payment to start a new one.'],
-      uncertain: ['Status unverified', 'We’re checking your payment', 'The provider has not returned a verified outcome. Don’t start a separate payment yet. Keep your order reference and check again. If it stays unresolved, you can dismiss this payment to start a new one.'],
-      review: ['Review needed', 'Your payment needs a review', 'The payment has not been confirmed complete, so don’t pay again yet. Contact the merchant with your order reference. If you don’t see any charge, you can settle another way — use the crypto option below, or dismiss this payment to start a new one.'],
-      under_review: ['Under review', 'Your payment is under review', 'The payment has not been confirmed complete, so don’t pay again yet. Contact the merchant with your order reference. If you don’t see any charge, you can settle another way — use the crypto option below, or dismiss this payment to start a new one.'],
+      unknown: ['Status unverified', 'We’re checking your payment', 'The provider hasn’t confirmed the outcome. Keep your order reference and check the status before trying again.'],
+      uncertain: ['Status unverified', 'We’re checking your payment', 'The provider hasn’t confirmed the outcome. Keep your order reference and check the status before trying again.'],
+      review: ['Review needed', 'Your payment needs a review', 'Don’t pay again yet. Contact the merchant with your order reference.'],
+      under_review: ['Under review', 'Your payment is under review', 'Don’t pay again yet. Contact the merchant with your order reference.'],
     };
     if (AWAITING_PAYMENT.has(order.status)) {
+      const expires = expiryTime(order);
+      if (expires !== null && expires <= Date.now()) {
+        return { label: 'Window ended', title: 'Check your payment status', description: 'Don’t send funds to the old address. Check the latest status if you already paid.', tone: 'problem', icon: 'info' };
+      }
+      if (isOffline() || state.paymentDetailsStale) {
+        return { label: 'Awaiting payment', title: 'Refresh your payment details', description: 'Reconnect and check the latest status before sending funds.', tone: 'pending', icon: 'arrow-clockwise' };
+      }
       const ready = order.method === 'card' ? Boolean(safeCheckoutUrl(order.checkoutUrl))
         : Boolean(order.payment?.address && order.payment?.amount && order.asset);
       return {
@@ -1555,52 +1632,30 @@
         title: ready ? (order.method === 'card' ? 'Continue with your card' : 'Ready when you are') : 'Preparing your payment',
         description: ready ? (order.method === 'card'
           ? 'Open the provider’s checkout below. This page will check the payment status when you return.'
-          : 'Use the exact coin, network and amount below. This page checks the payment status with the provider. Made a mistake? You can dismiss this payment below and start a new one, as long as you have not sent funds to the address.')
+          : `Use the exact coin, network and amount below.${needsDismissConfirmation(order) ? ' Made a mistake? Choose Start over if you haven’t sent funds.' : ''}`)
           : 'Your payment reference is saved. The provider is preparing the payment details; there’s no need to start another payment.',
         tone: 'pending', icon: order.method === 'card' ? 'credit-card' : 'wallet',
       };
     }
-    // A card checkout that never surfaced a provider link cannot have been paid:
-    // one short answer with a way forward instead of stacked warnings.
     if (order.method === 'card' && ['unknown', 'uncertain'].includes(order.status) && !order.checkoutUrl) {
       return {
-        label: 'Checkout unconfirmed', title: 'Nothing was charged',
-        description: 'The payment provider did not confirm this checkout, so no payment was taken. Dismiss it below to start a new payment, or pay with crypto instead.',
+        label: 'Checkout unconfirmed', title: 'Card checkout didn’t open',
+        description: 'We couldn’t confirm this checkout. Check its status before paying again. If you submitted card details or see a charge, contact the merchant.',
         tone: 'problem', icon: 'info', hideProviderMessage: true,
       };
     }
     if (order.status === 'partially_paid') {
-      const shortfall = partialRemainder(order);
-      const received = partialReceivedLabel(order);
-      const expectedText = order.method === 'crypto' && order.payment ? formatMoney(order.payment.amount, order.payment.currency) : formatMoney(order.amount, order.currency);
-      const receivedText = received ? `We received ${received} of ${expectedText}.` : '';
-      const windowLive = order.method === 'crypto' && order.payment
-        ? (expiryTime(order) === null || expiryTime(order) > Date.now())
-        : null;
-      if (order.method === 'crypto' && windowLive === true) {
-        const remaining = shortfall ? ` Send the remaining ${formatMoney(shortfall.remaining, shortfall.currency)} to the same payment address below before the window ends — this page checks automatically and completes the payment.` : '';
-        return {
-          label: 'Partial payment', title: 'Partial payment received',
-          description: `${receivedText} Don’t send the full amount again.${remaining}`,
-          tone: 'pending', icon: 'arrow-clockwise',
-        };
-      }
-      if (order.method === 'crypto' && windowLive === false) {
-        return {
-          label: 'Partial payment', title: 'Partial payment received',
-          description: `${receivedText} The payment window has ended. Don’t send the full amount again — contact the merchant with your order reference before sending more.`,
-          tone: 'problem', icon: 'info',
-        };
-      }
-      const remainingText = shortfall ? `The remaining amount is ${formatMoney(shortfall.remaining, shortfall.currency)}.` : 'The exact amount received is shown below.';
+      const offline = isOffline() ? 'These are the last reported amounts. Reconnect to check the latest status. ' : '';
+      const expires = expiryTime(order);
+      const ended = expires !== null && expires <= Date.now() ? 'The payment window has ended. ' : '';
       return {
         label: 'Partial payment', title: 'Partial payment received',
-        description: `${receivedText} Don’t send the full amount again. ${remainingText} Contact the merchant with your order reference before sending more.`,
+        description: `${offline}${ended}Don’t send more yet. Check the status or contact the merchant with your order reference for next steps.`,
         tone: 'problem', icon: 'info',
       };
     }
-      const values = map[order.status] || ['Status unverified', 'Your payment needs a status check', 'Completion has not been verified. Don’t start a separate payment. Keep your order reference and check again or contact the merchant.'];
-    const problem = FINAL_PROBLEMS.has(order.status) || order.status === 'partially_paid';
+    const values = map[order.status] || ['Status unverified', 'Your payment needs a status check', 'Completion has not been verified. Don’t start a separate payment. Keep your order reference and check again or contact the merchant.'];
+    const problem = FINAL_PROBLEMS.has(order.status);
     return { label: values[0], title: values[1], description: values[2], tone: problem ? 'problem' : 'pending', icon: problem ? 'info' : 'arrow-clockwise' };
   }
 
@@ -1625,12 +1680,27 @@
 
   function canSendPayment(order) {
     const expiry = expiryTime(order);
-    const windowLive = expiry === null || expiry > Date.now();
-    // A live partially_paid window accepts the shortfall at the same address.
-    if (order.status === 'partially_paid' && order.method === 'crypto' && !order.complete) {
-      return windowLive && Boolean(partialRemainder(order));
-    }
-    return !order.complete && !order.terminal && AWAITING_PAYMENT.has(order.status) && windowLive;
+    return !isOffline() && !state.paymentDetailsStale && !state.viewingHistory && !order.abandonedAt && !order.complete && !order.terminal
+      && AWAITING_PAYMENT.has(order.status) && (expiry === null || expiry > Date.now());
+  }
+
+  function clearCopyFallback() {
+    el.copyFallback.hidden = true;
+    el.copyFallbackValue.value = '';
+    el.copyFeedback.textContent = '';
+  }
+
+  function hideCryptoInstructions() {
+    el.cryptoPayment.hidden = true;
+    el.paymentAddress.value = '';
+    el.paymentMemo.value = '';
+    el.paymentMemoWrap.hidden = true;
+    el.paymentAmount.textContent = '';
+    el.paymentQrWrap.hidden = true;
+    el.paymentQr.removeAttribute('src');
+    el.paymentExpiry.hidden = true;
+    el.cryptoPayment.querySelectorAll('[data-copy]').forEach((button) => { button.disabled = true; });
+    if (el.copyFallback.dataset.field !== 'order') clearCopyFallback();
   }
 
   function renderOrder() {
@@ -1657,55 +1727,45 @@
     el.receiptMethod.textContent = order.method === 'card' ? 'Card (fiat on-ramp)' : 'Crypto';
     el.receiptAssetRow.hidden = !order.asset;
     el.receiptAsset.textContent = order.asset ? `${order.asset.ticker} · ${order.asset.network}` : '';
-    const receivedRow = order.status === 'partially_paid' && order.actuallyPaid;
-    el.receiptReceivedRow.hidden = !receivedRow;
-    el.receiptReceived.textContent = receivedRow ? partialReceivedLabel(order) : '';
+    const partial = order.status === 'partially_paid' ? partialAmounts(order) : {};
+    // The card receipt already shows the original fiat price.
+    const expected = order.method === 'crypto' ? partial.expected : '';
+    el.receiptExpectedRow.hidden = !expected;
+    el.receiptExpected.textContent = expected || '';
+    el.receiptReceivedRow.hidden = !partial.received;
+    el.receiptReceived.textContent = partial.received || '';
+    el.receiptShortfallRow.hidden = !partial.shortfall;
+    el.receiptShortfall.textContent = partial.shortfall || '';
     const created = order.createdAt ? Date.parse(order.createdAt) : NaN;
     el.receiptCreatedRow.hidden = !Number.isFinite(created);
     el.receiptCreated.textContent = Number.isFinite(created)
       ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(created)) : '';
     const payment = order.payment;
     const hasCryptoDetails = order.method === 'crypto' && payment?.address && payment?.amount && order.asset;
-    el.cryptoPayment.hidden = !hasCryptoDetails || order.complete;
-    if (hasCryptoDetails) {
-      const sendable = canSendPayment(order);
-      const shortfall = order.status === 'partially_paid' ? partialRemainder(order) : null;
-      el.paymentAmountLabel.textContent = sendable ? (shortfall ? 'Send the remaining amount' : 'Send exactly') : 'Original requested amount';
-      el.paymentAmount.textContent = shortfall ? shortfall.remaining : payment.amount;
-      el.paymentTicker.textContent = shortfall ? payment.currency : order.asset.ticker;
+    const sendable = canSendPayment(order);
+    if (hasCryptoDetails && sendable) {
+      el.cryptoPayment.hidden = false;
+      el.paymentAmountLabel.textContent = 'Send exactly';
+      el.paymentAmount.textContent = payment.amount;
+      el.paymentTicker.textContent = order.asset.ticker;
       el.paymentNetwork.textContent = order.asset.network;
       if (el.paymentAddress.value !== payment.address) el.paymentAddress.value = payment.address;
       el.paymentMemoWrap.hidden = payment.memo === null;
       if (el.paymentMemo.value !== (payment.memo ?? '')) el.paymentMemo.value = payment.memo ?? '';
-      // The stored QR encodes the full original amount, which is wrong for a
-      // top-up — address and copy fields carry the shortfall instead.
-      const showQr = sendable && !shortfall && safeQr(payment.qrDataUrl);
+      const showQr = safeQr(payment.qrDataUrl);
       el.paymentQrWrap.hidden = !showQr;
       if (showQr && el.paymentQr.getAttribute('src') !== payment.qrDataUrl) el.paymentQr.src = payment.qrDataUrl;
       if (!showQr) el.paymentQr.removeAttribute('src');
-      el.cryptoPayment.querySelectorAll('[data-copy]').forEach((button) => { button.disabled = !sendable; });
-      el.networkCaution.textContent = sendable && !shortfall
-        ? `Send only ${order.asset.ticker} on ${order.asset.network}. A different coin or network may result in lost funds.`
-        : sendable && shortfall
-          ? `Send only ${order.asset.ticker} on ${order.asset.network}. A different coin or network may result in lost funds.`
-          : order.status === 'partially_paid'
-            ? (shortfall
-              ? `Received so far: ${partialReceivedLabel(order)}. The remaining amount is ${formatMoney(shortfall.remaining, shortfall.currency)}. The payment window has ended — contact the merchant before sending more.`
-              : 'This is the original requested amount, not the amount remaining. Contact the merchant before sending any more funds.')
-            : 'These details are for your reference. Don’t send another payment without checking the latest status with the merchant.';
+      el.cryptoPayment.querySelectorAll('[data-copy]').forEach((button) => { button.disabled = false; });
+      el.networkCaution.textContent = `Send only ${order.asset.ticker} on ${order.asset.network}. A different coin or network may result in lost funds.`;
       updateExpiry();
     } else {
-      el.paymentQrWrap.hidden = true;
-      el.paymentQr.removeAttribute('src');
-      el.paymentExpiry.hidden = true;
+      hideCryptoInstructions();
     }
-    // Without a live checkout link the on-ramp section is noise; the guide and
-    // dismissal sections carry the way forward for dead ends.
-    el.cardPayment.hidden = order.method !== 'card' || order.complete || order.status === 'rejected'
-      || Boolean(presentation.hideProviderMessage);
+    el.cardPayment.hidden = order.method !== 'card' || !sendable;
     el.cardRecovery.hidden = !(order.method === 'card' && ['failed', 'expired', 'refunded'].includes(order.status) && order.terminal && !order.complete);
     const checkoutUrl = safeCheckoutUrl(order.checkoutUrl);
-    const showCheckoutLink = order.method === 'card' && canSendPayment(order) && checkoutUrl;
+    const showCheckoutLink = order.method === 'card' && sendable && checkoutUrl;
     el.externalCheckout.hidden = !showCheckoutLink;
     if (showCheckoutLink) {
       el.externalCheckout.href = checkoutUrl.href;
@@ -1717,11 +1777,7 @@
         : 'The provider’s checkout link is being prepared. Check the status again shortly.';
     }
     el.missingPaymentActions.hidden = !referenceUnresolvable();
-    el.stalePaymentActions.hidden = referenceUnresolvable() || !canDismissOrder(order);
-    const confirmNeeded = needsDismissConfirmation(order);
-    el.dismissConfirmWrap.hidden = !confirmNeeded;
-    el.dismissConfirm.checked = confirmNeeded && el.dismissConfirm.checked;
-    el.dismissPaymentButton.disabled = state.checkoutBusy || (confirmNeeded && !el.dismissConfirm.checked);
+    renderDismissControl(order);
     // The rejected/recovery section covers terminal card problems; this entry
     // covers every other card dead end so the payer always sees the crypto path
     // here, without hunting through help or switching methods first.
@@ -1767,55 +1823,71 @@
       const saved = JSON.parse(raw);
       if (validToken(saved?.token) && Number.isFinite(saved.timestamp) && saved.timestamp > 0) {
         // A dismissed payment stays dismissed, including in other tabs.
-        if (dismissedTokens().includes(saved.token)) {
-          localStorage.removeItem(STORAGE_KEY);
-          return null;
-        }
+        if (dismissedTokens().includes(saved.token)) return null;
         return { token: saved.token, timestamp: saved.timestamp };
       }
-      localStorage.removeItem(STORAGE_KEY);
     } catch { /* Storage can be blocked. Checkout still works within this tab. */ }
     return null;
   }
 
-  function rememberPayment(token) {
+  function readPreviousPayment() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PREVIOUS_KEY) || 'null');
+      if (validToken(saved?.token) && Number.isFinite(Date.parse(saved.abandonedAt))) return saved;
+    } catch { /* The status link is optional. */ }
+    return null;
+  }
+
+  function rememberReleasedPayment(order) {
+    if (!dismissedTokens().includes(order.token)) rememberDismissedToken(order.token);
+    const prior = readPreviousPayment() || state.previousPayment;
+    if (prior && Date.parse(prior.abandonedAt) >= Date.parse(order.abandonedAt)) {
+      state.previousPayment = prior;
+      return;
+    }
+    state.previousPayment = { token: order.token, abandonedAt: order.abandonedAt };
+    try { localStorage.setItem(PREVIOUS_KEY, JSON.stringify(state.previousPayment)); }
+    catch { /* The original remains checkable in this tab. */ }
+  }
+
+  function rememberPayment(token, recover = false) {
+    const dismissed = dismissedTokens();
+    if (dismissed.includes(token) && !recover) return false;
     const timestamp = state.saved?.token === token ? state.saved.timestamp : Date.now();
     state.saved = { token, timestamp };
     try {
+      // Only a server-confirmed active order can restore an earlier local dismissal.
+      if (recover && dismissed.includes(token)) localStorage.setItem(DISMISS_KEY, JSON.stringify(dismissed.filter(item => item !== token)));
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ token, timestamp }));
       state.storageFailed = false;
     } catch { state.storageFailed = true; }
     el.storageNote.hidden = !state.storageFailed;
+    return true;
   }
 
   function renderResume() {
-    const exists = Boolean(state.saved?.token || state.token);
+    const token = activePaymentToken();
+    const order = state.order?.token === token ? state.order : null;
     const pendingPreset = state.presetPending;
+    el.previousPaymentNotice.hidden = !state.previousPayment;
     el.presetNotice.hidden = !pendingPreset;
     if (pendingPreset) {
       const forLabel = pendingPreset.reference ? ` · for ${pendingPreset.reference}` : '';
       el.presetNoticeTitle.textContent = `This payment link is for ${formatMoney(pendingPreset.amount, pendingPreset.currency)}${forLabel}`;
       const blocked = hasUnresolvedPayment();
-      const dismissible = canDismissSaved();
-      if (blocked && !dismissible) {
-        el.presetNoticeText.textContent = 'Your earlier payment isn’t finished yet. Check its status first — the link amount can be applied once that payment is finished or over a day old.';
-      } else if (blocked) {
-        el.presetNoticeText.textContent = 'Your earlier payment is saved in this browser. Applying the link amount dismisses it here; that does not cancel the payment.';
-      } else {
-        el.presetNoticeText.textContent = 'Apply the linked amount to continue with this link’s payment.';
-      }
-    el.applyPresetButton.disabled = Boolean((blocked && !dismissible) || state.checkoutBusy);
-    el.applyPresetButton.setAttribute('aria-disabled', String(el.applyPresetButton.disabled));
+      el.presetNoticeText.textContent = blocked
+        ? 'Review the earlier payment first. The linked amount can be used once that checkout is finished or released.'
+        : 'Apply the linked amount to continue with this link’s payment.';
+      el.applyPresetButton.disabled = state.checkoutBusy || state.abandonBusy;
+      el.applyPresetButton.setAttribute('aria-disabled', String(el.applyPresetButton.disabled));
     }
-    el.resumeNotice.hidden = !exists;
-    if (!exists) return;
-    const order = state.order;
-    const dismissible = canDismissSaved();
-    el.dismissNoticeButton.hidden = !dismissible || needsDismissConfirmation(state.order);
-    el.dismissNoticeButton.disabled = state.checkoutBusy;
+    el.resumeNotice.hidden = !token;
+    if (!token) return;
+    el.dismissNoticeButton.hidden = !canDismissSaved() || needsDismissConfirmation(order);
+    el.dismissNoticeButton.disabled = state.checkoutBusy || state.abandonBusy;
     el.resumeTitle.textContent = order ? statusPresentation(order).title : 'Your previous payment';
     el.resumeDescription.textContent = order?.complete ? 'Your receipt is available to review.'
-      : dismissible ? 'Dismiss it to start a new payment, or review its status first.'
+      : needsDismissConfirmation(order) ? 'If you haven’t sent funds, open this payment to start over.'
         : settledOrder(order) ? 'Review the provider’s latest status and order reference.'
           : 'Check this payment before starting another.';
   }
@@ -1832,13 +1904,23 @@
       state.token = order.token;
       state.pollDeadline = Date.now() + POLL_WINDOW;
       state.expiryCheckedFor = null;
+      resetDismissConfirmation();
+      clearCopyFallback();
+    }
+    if (order.abandonedAt) {
+      rememberReleasedPayment(order);
+      if (state.saved?.token === order.token || !state.saved) {
+        const stored = readSavedPayment();
+        state.saved = stored?.token === order.token ? null : stored;
+      }
+      state.viewingHistory = true;
     }
     state.order = order;
+    state.paymentDetailsStale = order.statusStale === true;
     renderHeading();
-    if (settledOrder(order)) state.idempotencyKey = null;
+    if (!state.viewingHistory && settledOrder(order)) state.idempotencyKey = null;
     state.lookupMissing = false;
     state.pollStopped = order.terminal || order.complete;
-    rememberPayment(order.token);
     renderOrder();
     el.statusCheckMessage.textContent = state.pollStopped
       ? 'Showing the latest status from the payment provider.'
@@ -1909,11 +1991,12 @@
       state.pollErrors = 0;
       state.unverifiableChecks = 0;
       adoptOrder(order);
-      if (manual) announce(`Status checked. ${statusPresentation(order).label}.`);
+      if (manual) announce(order.statusStale ? 'The latest status is unavailable.' : `Status checked. ${statusPresentation(order).label}.`);
       if (el.paymentDialog.open) startExpiryClock();
-      return true;
+      return !order.statusStale;
     } catch (error) {
       if (generation !== state.pollGeneration || error.name === 'AbortError') return false;
+      state.paymentDetailsStale = true;
       state.pollErrors += 1;
       delay = Math.min(POLL_INTERVAL * (2 ** Math.min(state.pollErrors, 4)), 60000);
       state.lookupMissing = error instanceof ApiError && [404, 410].includes(error.status);
@@ -1926,7 +2009,7 @@
         el.statusCheckMessage.textContent = 'This payment reference could not be retrieved. Contact the merchant if you sent funds or see a charge. Removing the saved link does not cancel a payment.';
       } else if (referenceUnresolvable()) {
         state.pollStopped = true;
-        el.statusCheckMessage.textContent = 'The payment reference could not be verified. Remove the saved link below and start a new payment, or contact the merchant if you sent funds.';
+        el.statusCheckMessage.textContent = 'This payment reference could not be verified. You can remove the saved link. If you sent funds, contact the merchant first.';
       } else {
         el.statusCheckMessage.textContent = `The latest status couldn’t be retrieved. Retrying in ${Math.round(delay / 1000)} seconds. Don’t send another payment while the result is unknown.`;
       }
@@ -1934,6 +2017,8 @@
         el.paymentStatusLabel.textContent = 'Status unavailable';
         el.paymentTitle.textContent = state.lookupMissing ? 'Payment reference unavailable' : 'We couldn’t check your payment';
         el.paymentDescription.textContent = 'There is no verified result to show. Keep any order reference you have and contact the merchant if you need help.';
+      } else {
+        renderOrder();
       }
       el.missingPaymentActions.hidden = !referenceUnresolvable();
       renderResume();
@@ -1957,8 +2042,12 @@
     void checkStatus(true);
   }
 
-  function resumePayment(token, open = true) {
+  function resumePayment(token, open = true, historical = false) {
     if (!validToken(token)) return;
+    state.viewingHistory = historical || state.previousPayment?.token === token
+      || Boolean(state.saved?.token && state.saved.token !== token);
+    resetDismissConfirmation();
+    clearCopyFallback();
     if (state.token !== token) {
       stopPollingRequest();
       state.order = null;
@@ -1989,19 +2078,18 @@
     const seconds = Math.max(0, Math.ceil((expiry - Date.now()) / 1000));
     el.paymentExpiry.classList.toggle('is-expired', seconds === 0);
     if (!seconds) {
-      el.paymentExpiryValue.textContent = 'Window ended. Check the latest status.';
-      el.paymentQrWrap.hidden = true;
-      el.paymentAmountLabel.textContent = 'Original requested amount';
-      el.cryptoPayment.querySelectorAll('[data-copy]').forEach((button) => { button.disabled = true; });
-      if (AWAITING_PAYMENT.has(order.status)) {
-        el.networkCaution.textContent = 'The displayed payment window has ended. Don’t send funds until the provider or merchant confirms what to do next.';
-      }
       const expiryKey = `${order.token}|${order.payment.expiresAt}`;
-      if (state.expiryCheckedFor !== expiryKey && !state.pollBusy && !order.terminal) {
+      if (state.expiryCheckedFor !== expiryKey) {
         state.expiryCheckedFor = expiryKey;
+        renderOrder();
         // A clock is not an authoritative payment status. Ask the server instead.
-        schedulePoll(1);
+        if (!state.pollBusy && !order.terminal && !isOffline()) schedulePoll(1);
       }
+      el.paymentExpiry.hidden = true;
+      return;
+    }
+    if (el.cryptoPayment.hidden) {
+      el.paymentExpiry.hidden = true;
       return;
     }
     const hours = Math.floor(seconds / 3600);
@@ -2027,18 +2115,21 @@
     if (button.disabled || !state.order) return;
     const field = button.dataset.copy;
     if (!['order', 'amount', 'address', 'memo'].includes(field)) return;
-    const shortfall = field === 'amount' ? partialRemainder(state.order) : null;
-    const value = field === 'order' ? state.order.orderId
-      : field === 'amount' ? (shortfall ? shortfall.remaining : state.order.payment?.amount)
-        : field === 'address' ? state.order.payment?.address : state.order.payment?.memo;
+    const order = state.order;
+    const valid = () => state.order?.token === order.token && (field === 'order' || canSendPayment(state.order));
+    if (!valid()) return;
+    const value = field === 'order' ? order.orderId
+      : field === 'amount' ? order.payment?.amount
+        : field === 'address' ? order.payment?.address : order.payment?.memo;
     if (value == null) return;
     const label = field === 'order' ? 'Order reference' : field === 'memo' ? 'Memo'
-      : field === 'amount' ? (partialRemainder(state.order) ? 'Remaining amount' : 'Exact amount') : 'Address';
-    el.copyFallback.hidden = true;
-    el.copyFeedback.textContent = '';
+      : field === 'amount' ? 'Exact amount' : 'Address';
+    clearCopyFallback();
+    el.copyFallback.dataset.field = field;
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable.');
       await navigator.clipboard.writeText(value);
+      if (!valid()) return;
       el.copyFeedback.textContent = `${label} copied.`;
       const copyLabel = button.querySelector('.copy-label');
       if (copyLabel) {
@@ -2046,6 +2137,7 @@
         window.setTimeout(() => { copyLabel.textContent = 'Copy'; }, 1800);
       }
     } catch {
+      if (!valid()) return;
       el.copyFallback.hidden = false;
       el.copyFallbackValue.value = value;
       fitReadonlyFields(el.paymentDialog);
@@ -2128,8 +2220,10 @@
     // Cancel reads only. An in-flight checkout keeps its original retry identity.
     stopPollingRequest();
     window.clearTimeout(state.expiryTimer);
+    state.paymentDetailsStale = true;
     invalidateQuote();
-    renderContinue();
+    if (state.order) renderOrder();
+    else renderContinue();
     renderStatusButton();
     if (state.token) el.statusCheckMessage.textContent = 'You’re offline. Reconnect to check the latest payment status.';
   }
@@ -2148,6 +2242,41 @@
     startExpiryClock();
     refreshOnReturn();
     // Reconnecting never submits or retries POST /api/checkout.
+  }
+
+  function syncPaymentStorage(key) {
+    if (key === PREVIOUS_KEY) {
+      state.previousPayment = readPreviousPayment();
+      renderResume();
+      return;
+    }
+    if (key !== STORAGE_KEY && key !== DISMISS_KEY) return;
+    const active = activePaymentToken();
+    if (key === DISMISS_KEY && active && dismissedTokens().includes(active)) {
+      const applied = dropDismissedLocalPayment(active);
+      if (applied) announcePendingPreset(applied);
+      else announce('The saved payment changed in another tab.');
+    }
+    const saved = readSavedPayment();
+    if (!saved || saved.token === state.saved?.token) return;
+    state.saved = saved;
+    if (state.token && state.token !== saved.token) {
+      state.viewingHistory = true;
+      resetDismissConfirmation();
+    }
+    state.rejectedRetryApproved = false;
+    if (!state.checkoutBusy && !state.recoveryRequest) state.idempotencyKey = null;
+    invalidateQuote();
+    if (state.guide) {
+      state.guidePaymentChanged = true;
+      state.guideMessage = 'A payment changed in another tab. Check it before making another payment.';
+      renderGuide();
+    }
+    if (state.order) renderOrder();
+    else {
+      renderResume();
+      renderContinue();
+    }
   }
 
   function wireEvents() {
@@ -2229,7 +2358,8 @@
     el.retryAssets.addEventListener('click', () => { void loadAssets(); });
     el.retryConfig.addEventListener('click', () => { void loadConfig(); });
     el.retryEstimate.addEventListener('click', () => queueQuote(0));
-    el.resumeButton.addEventListener('click', () => resumePayment(state.token || state.saved?.token));
+    el.resumeButton.addEventListener('click', () => resumePayment(activePaymentToken()));
+    el.previousPaymentButton.addEventListener('click', () => resumePayment(state.previousPayment?.token, true, true));
     el.applyPresetButton.addEventListener('click', applyPresetFromLink);
     el.checkStatusButton.addEventListener('click', () => { void checkStatus(true); });
     [el.cryptoGuideButton, el.fiatGuideButton, el.helpGuideButton, el.rejectedCardGuideButton, el.resumeGuideButton, el.statusGuideButton]
@@ -2297,10 +2427,18 @@
     el.assetDialog.addEventListener('close', resumeGuideAfterAssetPicker);
     el.paymentDialog.addEventListener('close', () => {
       window.clearTimeout(state.expiryTimer);
-      el.copyFallback.hidden = true;
-      el.copyFeedback.textContent = '';
+      clearCopyFallback();
+      resetDismissConfirmation();
+      if (state.viewingHistory) {
+        stopPollingRequest();
+        state.viewingHistory = false;
+        state.order = null;
+        state.token = null;
+        renderHeading();
+      }
       renderResume();
-      // The payment remains active. Closing a dialog never calls a cancellation endpoint.
+      renderContinue();
+      // Closing a dialog never releases or cancels the payment.
     });
     el.paymentDialog.querySelectorAll('[data-copy]').forEach((button) => {
       button.addEventListener('click', () => { void copyPayment(button); });
@@ -2313,25 +2451,27 @@
       el.statusCheckMessage.textContent = 'Finish in the provider’s tab, then return here to check the payment status.';
     });
     el.dismissConfirm.addEventListener('change', () => {
-      el.dismissPaymentButton.disabled = state.checkoutBusy || (needsDismissConfirmation(state.order) && !el.dismissConfirm.checked);
+      state.confirmedToken = el.dismissConfirm.checked ? state.order?.token : null;
+      showDismissError();
+      if (state.order) renderDismissControl(state.order);
     });
     el.dismissNoticeButton.addEventListener('click', dismissPayment);
     el.dismissPaymentButton.addEventListener('click', dismissPayment);
     el.forgetPaymentButton.addEventListener('click', () => {
-      if (!referenceUnresolvable()) return;
-      stopPollingRequest();
-      state.token = null;
-      state.order = null;
-      state.saved = null;
-      state.lookupMissing = false;
-      state.pollStopped = true;
-      state.idempotencyKey = null;
-      try { localStorage.removeItem(STORAGE_KEY); } catch { /* Current tab can still forget the token. */ }
-      el.paymentDialog.close();
-      renderResume();
-      renderContinue();
-      showCheckoutError('The saved link was removed from this tab. This did not cancel a payment. Contact the merchant if you already sent funds.');
-      const applied = maybeApplyPendingPreset();
+      if (!referenceUnresolvable() || state.abandonBusy) return;
+      const token = state.token;
+      let applied;
+      if (state.viewingHistory) {
+        if (state.previousPayment?.token === token) {
+          state.previousPayment = null;
+          try { if (readPreviousPayment()?.token === token) localStorage.removeItem(PREVIOUS_KEY); } catch { /* Optional history link. */ }
+        }
+        el.paymentDialog.close();
+      } else {
+        rememberDismissedToken(token);
+        applied = clearLocalPayment(token);
+      }
+      showCheckoutError('Saved link removed from this browser. This did not cancel a payment. Contact the merchant if you already sent funds.');
       if (applied) announcePendingPreset(applied);
     });
     document.addEventListener('visibilitychange', () => {
@@ -2363,36 +2503,7 @@
     });
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    window.addEventListener('storage', (event) => {
-      // Another tab dismissed this payment: mirror the local cleanup here so the
-      // same reference cannot be reopened and paid from this tab.
-      if (event.key === DISMISS_KEY) {
-        const applied = dropDismissedLocalPayment();
-        if (applied) {
-          showCheckoutError('The payment was dismissed in another tab, so this browser no longer tracks it. That did not cancel the payment. If you sent funds, contact the merchant before paying again.');
-          announcePendingPreset(applied);
-        } else {
-          renderResume();
-          renderContinue();
-        }
-        return;
-      }
-      if (event.key !== STORAGE_KEY) return;
-      const saved = readSavedPayment();
-      if (saved?.token && saved.token !== state.token) {
-        state.saved = saved;
-        state.rejectedRetryApproved = false;
-        state.idempotencyKey = null;
-        invalidateQuote();
-        if (state.guide) {
-          state.guidePaymentChanged = true;
-          state.guideMessage = 'A payment changed in another tab. Check it before making another payment.';
-          renderGuide();
-        }
-        renderResume();
-        renderContinue();
-      }
-    });
+    window.addEventListener('storage', event => syncPaymentStorage(event.key));
     window.addEventListener('pagehide', () => {
       stopPollingRequest();
       window.clearTimeout(state.expiryTimer);
@@ -2428,6 +2539,7 @@
     configureTheme();
     wireEvents();
     state.saved = readSavedPayment();
+    state.previousPayment = readPreviousPayment();
     restoreAttempt();
     restoreGuide();
     const entryUrl = new URL(window.location.href);

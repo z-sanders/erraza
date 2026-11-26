@@ -11,7 +11,7 @@ const { SECURITY_HEADERS } = require('../server');
 const ROOT = path.resolve(__dirname, '..');
 const failures = [];
 const fail = message => failures.push(message);
-const API_NAMES = ['config', 'currencies', 'estimate', 'min-amount', 'checkout', 'status', 'ipn', 'reconcile'];
+const API_NAMES = ['config', 'currencies', 'estimate', 'min-amount', 'checkout', 'abandon', 'status', 'ipn', 'reconcile'];
 
 async function exists(filename) {
   try { return await fs.lstat(filename); }
